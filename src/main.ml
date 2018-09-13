@@ -54,34 +54,38 @@ let prbindingty ctx b = match b with
     NameBind -> ()
   | VarBind(tyT) -> pr ": "; printty tyT
 
-let rec process_command ctx cmd = match cmd with
+let rec process_command (ctx,nextuvar,constr) cmd = match cmd with
   | Eval(fi,t) ->
-      let tyT = typeof ctx t in
+      let (tyT,nextuvar',constr_t) = recon ctx nextuvar t in
       let t' = eval ctx t in
+      let constr' = combineconstr constr constr_t in
+      let constr'' =
+        unify fi ctx "Could not simplify constraints" constr' in
       printtm_ATerm true ctx t';
       print_break 1 2;
       pr ": ";
-      printty tyT;
+      open_hovbox 0;
+      printty (applysubst constr'' tyT);
       force_newline();
-      ctx
+      (ctx, nextuvar', constr'')
   | Bind(fi,x,bind) ->
-      pr x; pr " "; prbindingty ctx bind; force_newline();
-      addbinding ctx x bind
+       pr x; pr " "; prbinding ctx bind; force_newline();
+      (addbinding ctx x bind, uvargen, constr)
 
-let process_file f ctx =
+let process_file f (ctx,nextuvar,constr) =
   alreadyImported := f :: !alreadyImported;
   let cmds,_ = parseFile f ctx in
-  let g ctx c =
+  let g (ctx,nextuvar,constr) c =
     open_hvbox 0;
-    let results = process_command ctx c in
+    let results = process_command (ctx,nextuvar,constr) c in
     print_flush();
     results
   in
-    List.fold_left g ctx cmds
+    List.fold_left g (ctx,nextuvar,constr) cmds
 
 let main () =
   let inFile = parseArgs() in
-  let _ = process_file inFile emptycontext in
+  let _ = process_file inFile (emptycontext, uvargen, emptyconstr) in
   ()
 
 let () = set_max_boxes 1000

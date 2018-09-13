@@ -6,22 +6,22 @@ open Support.Pervasive
 (* Datatypes *)
 
 type ty =
-    TyArr of ty * ty
-  | TyId of string
-  | TyBool
+    TyBool
   | TyNat
+  | TyArr of ty * ty
+  | TyId of string
 
 type term =
-    TmVar of info * int * int
-  | TmAbs of info * string * ty * term
-  | TmApp of info * term * term
-  | TmTrue of info
+    TmTrue of info
   | TmFalse of info
   | TmIf of info * term * term * term
   | TmZero of info
   | TmSucc of info * term
   | TmPred of info * term
   | TmIsZero of info * term
+  | TmVar of info * int * int
+  | TmAbs of info * string * ty * term
+  | TmApp of info * term * term
 
 type binding =
     NameBind
@@ -76,16 +76,16 @@ let rec name2index fi ctx x =
 
 let tmmap onvar c t =
   let rec walk c t = match t with
-    TmVar(fi,x,n) -> onvar fi c x n
-  | TmAbs(fi,x,tyT1,t2) -> TmAbs(fi,x,tyT1,walk (c+1) t2)
-  | TmApp(fi,t1,t2) -> TmApp(fi,walk c t1,walk c t2)
-  | TmTrue(fi) as t -> t
+    TmTrue(fi) as t -> t
   | TmFalse(fi) as t -> t
   | TmIf(fi,t1,t2,t3) -> TmIf(fi,walk c t1,walk c t2,walk c t3)
   | TmZero(fi)      -> TmZero(fi)
   | TmSucc(fi,t1)   -> TmSucc(fi, walk c t1)
   | TmPred(fi,t1)   -> TmPred(fi, walk c t1)
   | TmIsZero(fi,t1) -> TmIsZero(fi, walk c t1)
+  | TmVar(fi,x,n) -> onvar fi c x n
+  | TmAbs(fi,x,tyT1,t2) -> TmAbs(fi,x,tyT1,walk (c+1) t2)
+  | TmApp(fi,t1,t2) -> TmApp(fi,walk c t1,walk c t2)
   in walk c t
 
 let termShiftAbove d c t =
@@ -127,16 +127,16 @@ let rec getbinding fi ctx i =
 (* Extracting file info *)
 
 let tmInfo t = match t with
-    TmVar(fi,_,_) -> fi
-  | TmAbs(fi,_,_,_) -> fi
-  | TmApp(fi, _, _) -> fi
-  | TmTrue(fi) -> fi
+    TmTrue(fi) -> fi
   | TmFalse(fi) -> fi
   | TmIf(fi,_,_,_) -> fi
   | TmZero(fi) -> fi
   | TmSucc(fi,_) -> fi
   | TmPred(fi,_) -> fi
   | TmIsZero(fi,_) -> fi
+  | TmVar(fi,_,_) -> fi
+  | TmAbs(fi,_,_,_) -> fi
+  | TmApp(fi, _, _) -> fi
 
 (* ---------------------------------------------------------------------- *)
 (* Printing *)
@@ -179,22 +179,15 @@ and printty_ArrowType outer  tyT = match tyT with
   | tyT -> printty_AType outer tyT
 
 and printty_AType outer tyT = match tyT with
-    TyId(b) -> pr b
-  | TyBool -> pr "Bool"
+    TyBool -> pr "Bool"
   | TyNat -> pr "Nat"
+  | TyId(b) -> pr b
   | tyT -> pr "("; printty_Type outer tyT; pr ")"
 
 let printty tyT = printty_Type true tyT
 
 let rec printtm_Term outer ctx t = match t with
-    TmAbs(fi,x,tyT1,t2) ->
-      (let (ctx',x') = (pickfreshname ctx x) in
-         obox(); pr "lambda ";
-         pr x'; pr ":"; printty_Type false tyT1; pr ".";
-         if (small t2) && not outer then break() else print_space();
-         printtm_Term outer ctx' t2;
-         cbox())
-  | TmIf(fi, t1, t2, t3) ->
+    TmIf(fi, t1, t2, t3) ->
        obox0();
        pr "if ";
        printtm_Term false ctx t1;
@@ -205,31 +198,30 @@ let rec printtm_Term outer ctx t = match t with
        pr "else ";
        printtm_Term false ctx t3;
        cbox()
+  | TmAbs(fi,x,tyT1,t2) ->
+      (let (ctx',x') = (pickfreshname ctx x) in
+         obox(); pr "lambda ";
+         pr x'; pr ":"; printty_Type false tyT1; pr ".";
+         if (small t2) && not outer then break() else print_space();
+         printtm_Term outer ctx' t2;
+         cbox())
   | t -> printtm_AppTerm outer ctx t
 
 and printtm_AppTerm outer ctx t = match t with
-    TmApp(fi, t1, t2) ->
+    TmPred(_,t1) ->
+       pr "pred "; printtm_ATerm false ctx t1
+  | TmIsZero(_,t1) ->
+       pr "iszero "; printtm_ATerm false ctx t1
+  | TmApp(fi, t1, t2) ->
       obox0();
       printtm_AppTerm false ctx t1;
       print_space();
       printtm_ATerm false ctx t2;
       cbox()
-  | TmPred(_,t1) ->
-       pr "pred "; printtm_ATerm false ctx t1
-  | TmIsZero(_,t1) ->
-       pr "iszero "; printtm_ATerm false ctx t1
   | t -> printtm_ATerm outer ctx t
 
 and printtm_ATerm outer ctx t = match t with
-    TmVar(fi,x,n) ->
-      if ctxlength ctx = n then
-        pr (index2name fi ctx x)
-      else
-        pr ("[bad index: " ^ (string_of_int x) ^ "/" ^ (string_of_int n)
-            ^ " in {"
-            ^ (List.fold_left (fun s (x,_) -> s ^ " " ^ x) "" ctx)
-            ^ " }]")
-  | TmTrue(_) -> pr "true"
+    TmTrue(_) -> pr "true"
   | TmFalse(_) -> pr "false"
   | TmZero(fi) ->
        pr "0"
@@ -239,6 +231,14 @@ and printtm_ATerm outer ctx t = match t with
        | TmSucc(_,s) -> f (n+1) s
        | _ -> (pr "(succ "; printtm_ATerm false ctx t1; pr ")")
      in f 1 t1
+  | TmVar(fi,x,n) ->
+      if ctxlength ctx = n then
+        pr (index2name fi ctx x)
+      else
+        pr ("[bad index: " ^ (string_of_int x) ^ "/" ^ (string_of_int n)
+            ^ " in {"
+            ^ (List.fold_left (fun s (x,_) -> s ^ " " ^ x) "" ctx)
+            ^ " }]")
   | t -> pr "("; printtm_Term outer ctx t; pr ")"
 
 let printtm ctx t = printtm_Term true ctx t
