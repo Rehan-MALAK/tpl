@@ -27,13 +27,11 @@ open Syntax
 %token <Support.Error.info> ELSE
 %token <Support.Error.info> TRUE
 %token <Support.Error.info> FALSE
-%token <Support.Error.info> LAMBDA
-%token <Support.Error.info> TIMESFLOAT
+%token <Support.Error.info> BOOL
 %token <Support.Error.info> SUCC
 %token <Support.Error.info> PRED
 %token <Support.Error.info> ISZERO
-%token <Support.Error.info> LET
-%token <Support.Error.info> IN
+%token <Support.Error.info> NAT
 
 /* Identifier and constant value tokens */
 %token <string Support.Error.withinfo> UCID  /* uppercase-initial */
@@ -84,21 +82,11 @@ open Syntax
 /* ---------------------------------------------------------------------- */
 /* The starting production of the generated parser is the syntactic class
    toplevel.  The type that is returned when a toplevel is recognized is
-     Syntax.context -> (Syntax.command list * Syntax.context)
-   that is, the parser returns to the user program a function that,
-   when given a naming context, returns a fully parsed list of
-   Syntax.commands and the new naming context that results when
-   all the names bound in these commands are defined.
-
-   All of the syntactic productions in the parser follow the same pattern:
-   they take a context as argument and return a fully parsed abstract
-   syntax tree (and, if they involve any constructs that bind variables
-   in some following phrase, a new context).
-
+   Syntax.command list.
 */
 
 %start toplevel
-%type < Syntax.context -> (Syntax.command list * Syntax.context) > toplevel
+%type < Syntax.command list > toplevel
 %%
 
 /* ---------------------------------------------------------------------- */
@@ -108,114 +96,60 @@ open Syntax
    by a semicolon. */
 toplevel :
     EOF
-      { fun ctx -> [],ctx }
+      { [] }
   | Command SEMI toplevel
-      { fun ctx ->
-          let cmd,ctx = $1 ctx in
-          let cmds,ctx = $3 ctx in
-          cmd::cmds,ctx }
+      { let cmd = $1 in
+          let cmds = $3 in
+          cmd::cmds }
 
 /* A top-level command */
 Command :
   | Term
-      { fun ctx -> (let t = $1 ctx in Eval(tmInfo t,t)),ctx }
-  | LCID Binder
-      { fun ctx -> ((Bind($1.i,$1.v,$2 ctx)), addname ctx $1.v) }
-
-/* Right-hand sides of top-level bindings */
-Binder :
-    SLASH
-      { fun ctx -> NameBind }
-  | EQ Term
-      { fun ctx -> TmAbbBind($2 ctx) }
+      { (let t = $1 in Eval(tmInfo t,t)) }
 
 Term :
     AppTerm
       { $1 }
   | IF Term THEN Term ELSE Term
-      { fun ctx -> TmIf($1, $2 ctx, $4 ctx, $6 ctx) }
-  | LAMBDA LCID DOT Term
-      { fun ctx ->
-          let ctx1 = addname ctx $2.v in
-          TmAbs($1, $2.v, $4 ctx1) }
-  | LAMBDA USCORE DOT Term
-      { fun ctx ->
-          let ctx1 = addname ctx "_" in
-          TmAbs($1, "_", $4 ctx1) }
-  | LET LCID EQ Term IN Term
-      { fun ctx -> TmLet($1, $2.v, $4 ctx, $6 (addname ctx $2.v)) }
-  | LET USCORE EQ Term IN Term
-      { fun ctx -> TmLet($1, "_", $4 ctx, $6 (addname ctx "_")) }
+      { TmIf($1, $2, $4, $6) }
 
 AppTerm :
-    PathTerm
+    ATerm
       { $1 }
-  | AppTerm PathTerm
-      { fun ctx ->
-          let e1 = $1 ctx in
-          let e2 = $2 ctx in
-          TmApp(tmInfo e1,e1,e2) }
-  | TIMESFLOAT PathTerm PathTerm
-      { fun ctx -> TmTimesfloat($1, $2 ctx, $3 ctx) }
-  | SUCC PathTerm
-      { fun ctx -> TmSucc($1, $2 ctx) }
-  | PRED PathTerm
-      { fun ctx -> TmPred($1, $2 ctx) }
-  | ISZERO PathTerm
-      { fun ctx -> TmIsZero($1, $2 ctx) }
-
-PathTerm :
-    PathTerm DOT LCID
-      { fun ctx ->
-          TmProj($2, $1 ctx, $3.v) }
-  | PathTerm DOT INTV
-      { fun ctx ->
-          TmProj($2, $1 ctx, string_of_int $3.v) }
-  | ATerm
-      { $1 }
+  | SUCC ATerm
+      { TmSucc($1, $2) }
+  | PRED ATerm
+      { TmPred($1, $2) }
+  | ISZERO ATerm
+      { TmIsZero($1, $2) }
 
 /* Atomic terms are ones that never require extra parentheses */
 ATerm :
     LPAREN Term RPAREN
       { $2 }
   | TRUE
-      { fun ctx -> TmTrue($1) }
+      { TmTrue($1) }
   | FALSE
-      { fun ctx -> TmFalse($1) }
-  | LCID
-      { fun ctx ->
-          TmVar($1.i, name2index $1.i ctx $1.v, ctxlength ctx) }
-  | LCURLY Fields RCURLY
-      { fun ctx ->
-          TmRecord($1, $2 ctx 1) }
-  | FLOATV
-      { fun ctx -> TmFloat($1.i, $1.v) }
-  | STRINGV
-      { fun ctx -> TmString($1.i, $1.v) }
+      { TmFalse($1) }
   | INTV
-      { fun ctx ->
-          let rec f n = match n with
+      { let rec f n = match n with
               0 -> TmZero($1.i)
             | n -> TmSucc($1.i, f (n-1))
           in f $1.v }
 
-Fields :
-    /* empty */
-      { fun ctx i -> [] }
-  | NEFields
-      { $1 }
+/* All type expressions */
+Type :
+    AType
+                { $1 }
 
-NEFields :
-    Field
-      { fun ctx i -> [$1 ctx i] }
-  | Field COMMA NEFields
-      { fun ctx i -> ($1 ctx i) :: ($3 ctx (i+1)) }
-
-Field :
-    LCID EQ Term
-      { fun ctx i -> ($1.v, $3 ctx) }
-  | Term
-      { fun ctx i -> (string_of_int i, $1 ctx) }
+/* Atomic types are those that never need extra parentheses */
+AType :
+    LPAREN Type RPAREN
+           { $2 }
+  | BOOL
+      { TyBool }
+  | NAT
+      { TyNat }
 
 
 /*   */
