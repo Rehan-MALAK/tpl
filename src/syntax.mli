@@ -5,24 +5,50 @@ open Support.Error
 
 (* Data type definitions *)
 type ty =
-    TyTop
+    TyVar of int * int
+  | TyId of string
   | TyArr of ty * ty
+  | TyUnit
   | TyRecord of (string * ty) list
+  | TyFloat
+  | TyRec of string * ty
+  | TyNat
+  | TyVariant of (string * ty) list
+  | TyString
   | TyBool
 
 type term =
     TmVar of info * int * int
   | TmAbs of info * string * ty * term
   | TmApp of info * term * term
-  | TmRecord of info * (string * term) list
-  | TmProj of info * term * string
+  | TmLet of info * string * term * term
+  | TmFix of info * term
   | TmTrue of info
   | TmFalse of info
   | TmIf of info * term * term * term
+  | TmString of info * string
+  | TmUnit of info
+  | TmAscribe of info * term * ty
+  | TmRecord of info * (string * term) list
+  | TmProj of info * term * string
+  | TmFloat of info * float
+  | TmTimesfloat of info * term * term
+  | TmFold of info * ty
+  | TmUnfold of info * ty
+  | TmZero of info
+  | TmSucc of info * term
+  | TmPred of info * term
+  | TmIsZero of info * term
+  | TmInert of info * ty
+  | TmCase of info * term * (string * (string * term)) list
+  | TmTag of info * string * term * ty
 
 type binding =
     NameBind
+  | TyVarBind
   | VarBind of ty
+  | TmAbbBind of term * (ty option)
+  | TyAbbBind of ty
 
 type command =
   | Eval of info * term
@@ -43,11 +69,14 @@ val getTypeFromContext : info -> context -> int -> ty
 (* Shifting and substitution *)
 val termShift: int -> term -> term
 val termSubstTop: term -> term -> term
+val typeShift : int -> ty -> ty
+val typeSubstTop: ty -> ty -> ty
+val tytermSubstTop: ty -> term -> term
 
 (* Printing *)
 val printtm: context -> term -> unit
 val printtm_ATerm: bool -> context -> term -> unit
-val printty : ty -> unit
+val printty : context -> ty -> unit
 val prbinding : context -> binding -> unit
 
 (* Misc *)
