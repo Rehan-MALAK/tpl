@@ -6,10 +6,15 @@ open Support.Error
 (* Data type definitions *)
 type ty =
     TyVar of int * int
+  | TyId of string
   | TyTop
-  | TyBot
   | TyArr of ty * ty
   | TyBool
+  | TyRecord of (string * ty) list
+  | TyString
+  | TyUnit
+  | TyFloat
+  | TyNat
 
 type term =
     TmVar of info * int * int
@@ -18,8 +23,20 @@ type term =
   | TmTrue of info
   | TmFalse of info
   | TmIf of info * term * term * term
-  | TmError of info
-  | TmTry of info * term * term
+  | TmRecord of info * (string * term) list
+  | TmProj of info * term * string
+  | TmLet of info * string * term * term
+  | TmFix of info * term
+  | TmString of info * string
+  | TmUnit of info
+  | TmAscribe of info * term * ty
+  | TmFloat of info * float
+  | TmTimesfloat of info * term * term
+  | TmZero of info
+  | TmSucc of info * term
+  | TmPred of info * term
+  | TmIsZero of info * term
+  | TmInert of info * ty
 
 type binding =
     NameBind
