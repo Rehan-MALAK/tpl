@@ -10,9 +10,10 @@ type kind =
   | KnArr of kind * kind
 
 type ty =
-    TyVar of int * int
+    TyTop
+  | TyVar of int * int
   | TyArr of ty * ty
-  | TyAll of string * kind * ty
+  | TyAll of string * ty * ty
   | TyAbs of string * kind * ty
   | TyApp of ty * ty
 
@@ -20,13 +21,13 @@ type term =
     TmVar of info * int * int
   | TmAbs of info * string * ty * term
   | TmApp of info * term * term
-  | TmTAbs of info * string * kind * term
+  | TmTAbs of info * string * ty * term
   | TmTApp of info * term * ty
 
 type binding =
     NameBind
-  | TyVarBind of kind
   | VarBind of ty
+  | TyVarBind of ty
 
 type context = (string * binding) list
 
@@ -77,9 +78,10 @@ let rec name2index fi ctx x =
 
 let tymap onvar c tyT =
   let rec walk c tyT = match tyT with
-    TyVar(x,n) -> onvar c x n
-  | TyArr(tyT1,tyT2) -> TyArr(walk c tyT1,walk c tyT2)
-  | TyAll(tyX,knK1,tyT2) -> TyAll(tyX,knK1,walk (c+1) tyT2)
+    TyArr(tyT1,tyT2) -> TyArr(walk c tyT1,walk c tyT2)
+  | TyTop -> TyTop
+  | TyVar(x,n) -> onvar c x n
+  | TyAll(tyX,tyT1,tyT2) -> TyAll(tyX,walk c tyT1,walk (c+1) tyT2)
   | TyAbs(tyX,knK1,tyT2) -> TyAbs(tyX,knK1,walk (c+1) tyT2)
   | TyApp(tyT1,tyT2) -> TyApp(walk c tyT1,walk c tyT2)
   in walk c tyT
@@ -89,7 +91,8 @@ let tmmap onvar ontype c t =
     TmVar(fi,x,n) -> onvar fi c x n
   | TmAbs(fi,x,tyT1,t2) -> TmAbs(fi,x,ontype c tyT1,walk (c+1) t2)
   | TmApp(fi,t1,t2) -> TmApp(fi,walk c t1,walk c t2)
-  | TmTAbs(fi,tyX,knK1,t2) -> TmTAbs(fi,tyX,knK1,walk (c+1) t2)
+  | TmTAbs(fi,tyX,tyT1,t2) ->
+      TmTAbs(fi,tyX,ontype c tyT1,walk (c+1) t2)
   | TmTApp(fi,t1,tyT2) -> TmTApp(fi,walk c t1,ontype c tyT2)
   in walk c t
 
@@ -112,8 +115,8 @@ let typeShift d tyT = typeShiftAbove d 0 tyT
 let bindingshift d bind =
   match bind with
     NameBind -> NameBind
-  | TyVarBind(knK) -> TyVarBind(knK)
   | VarBind(tyT) -> VarBind(typeShift d tyT)
+  | TyVarBind(tyS) -> TyVarBind(typeShift d tyS)
 
 (* ---------------------------------------------------------------------- *)
 (* Substitution *)
@@ -159,6 +162,10 @@ let rec getbinding fi ctx i =
      | _ -> error fi
        ("getTypeFromContext: Wrong kind of binding for variable "
         ^ (index2name fi ctx i))
+
+let rec maketop k = match k with
+    KnStar -> TyTop
+  | KnArr(knK1,knK2) -> TyAbs("_",knK1,maketop knK2)
 (* ---------------------------------------------------------------------- *)
 (* Extracting file info *)
 
@@ -219,9 +226,11 @@ let prokn ctx knK =
   if knK <> KnStar then (pr "::"; printkn_kind false ctx knK)
 
 let rec printty_Type outer ctx tyT = match tyT with
-    TyAll(tyX,knK1,tyT2) ->
+    TyAll(tyX,tyT1,tyT2) ->
       let (ctx1,tyX) = (pickfreshname ctx tyX) in
-      obox(); pr "All "; pr tyX; prokn ctx knK1; pr ".";
+      obox(); pr "All "; pr tyX;
+      proty ctx tyT1;
+      pr ".";
       print_space ();
       printty_Type outer ctx1 tyT2;
       cbox()
@@ -245,6 +254,9 @@ and printty_ArrowType outer ctx  tyT = match tyT with
       cbox()
   | tyT -> printty_AppType outer ctx tyT
 
+and proty ctx tyS =
+  if tyS <> TyTop then (pr "<:"; printty_Type false ctx tyS)
+
 and printty_AppType outer ctx k = match k with
     TyApp(tyT1,tyT2) ->
       obox0();
@@ -255,7 +267,8 @@ and printty_AppType outer ctx k = match k with
   | tyT -> printty_AType outer ctx tyT
 
 and printty_AType outer ctx tyT = match tyT with
-    TyVar(x,n) ->
+    TyTop -> pr "Top"
+  | TyVar(x,n) ->
       if ctxlength ctx = n then
         pr (index2name dummyinfo ctx x)
       else
@@ -275,14 +288,14 @@ let rec printtm_Term outer ctx t = match t with
          if (small t2) && not outer then break() else print_space();
          printtm_Term outer ctx' t2;
          cbox())
-  | TmTAbs(fi,x,knK,t) ->
+  | TmTAbs(fi,x,tyS,t) ->
       (let (ctx1,x) = (pickfreshname ctx x) in
-            obox(); pr "lambda "; pr x;
-            prokn ctx knK;
-            pr ".";
-            if (small t) && not outer then break() else print_space();
-            printtm_Term outer ctx1 t;
-            cbox())
+               obox(); pr "lambda "; pr x;
+               proty ctx tyS;
+               pr ".";
+               if (small t) && not outer then break() else print_space();
+               printtm_Term outer ctx1 t;
+               cbox())
   | t -> printtm_AppTerm outer ctx t
 
 and printtm_AppTerm outer ctx t = match t with
@@ -315,7 +328,7 @@ let printtm ctx t = printtm_Term true ctx t
 
 let prbinding ctx b = match b with
     NameBind -> ()
-  | TyVarBind(knK) -> pr ":: "; printkn ctx knK
   | VarBind(tyT) -> pr ": "; printty ctx tyT
+  | TyVarBind(tyS) -> pr "<: ";printty_Type false ctx tyS
 
 

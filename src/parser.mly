@@ -22,8 +22,10 @@ open Syntax
  */
 
 /* Keyword tokens */
-%token <Support.Error.info> TYPE
 %token <Support.Error.info> LAMBDA
+%token <Support.Error.info> TTOP
+%token <Support.Error.info> LEQ
+%token <Support.Error.info> TYPE
 %token <Support.Error.info> ALL
 
 /* Identifier and constant value tokens */
@@ -110,10 +112,10 @@ toplevel :
 Command :
   | Term
       { fun ctx -> (let t = $1 ctx in Eval(tmInfo t,t)),ctx }
-  | UCID TyBinder
-      { fun ctx -> ((Bind($1.i, $1.v, $2 ctx)), addname ctx $1.v) }
   | LCID Binder
       { fun ctx -> ((Bind($1.i,$1.v,$2 ctx)), addname ctx $1.v) }
+  | UCID TyBinder
+      { fun ctx -> ((Bind($1.i, $1.v, $2 ctx)), addname ctx $1.v) }
 
 /* Right-hand sides of top-level bindings */
 Binder :
@@ -125,6 +127,14 @@ Kind :
     ArrowKind
       { $1 }
 
+OType :
+   /* empty */
+      { fun ctx -> TyTop}
+ | LEQ Type
+      { $2 }
+ | COLONCOLON Kind
+      { fun ctx -> maketop ($2 ctx) }
+
 ArrowKind :
     AKind DARROW ArrowKind  { fun ctx -> KnArr($1 ctx, $3 ctx) }
   | AKind
@@ -134,7 +144,7 @@ ArrowKind :
 Type :
     ArrowType
                 { $1 }
-  | ALL UCID OKind DOT Type
+  | ALL UCID OType DOT Type
       { fun ctx ->
           let ctx1 = addname ctx $2.v in
           TyAll($2.v,$3 ctx,$5 ctx1) }
@@ -147,25 +157,13 @@ Type :
 AType :
     LPAREN Type RPAREN
            { $2 }
+  | TTOP
+      { fun ctx -> TyTop }
   | UCID
       { fun ctx ->
           TyVar(name2index $1.i ctx $1.v, ctxlength ctx) }
-
-TyBinder :
-    /* empty */
-      { fun ctx -> TyVarBind(KnStar) }
-  | COLONCOLON Kind
-      { fun ctx -> TyVarBind($2 ctx) }
-
-AKind :
-    STAR { fun ctx -> KnStar }
-  | LPAREN Kind RPAREN  { $2 }
-
-OKind :
-  /* empty */
-     { fun ctx -> KnStar}
-| COLONCOLON Kind
-     { $2 }
+  | TTOP LSQUARE Kind RSQUARE
+      { fun ctx -> maketop ($3 ctx) }
 
 /* An "arrow type" is a sequence of atomic types separated by
    arrows. */
@@ -186,7 +184,7 @@ Term :
       { fun ctx ->
           let ctx1 = addname ctx "_" in
           TmAbs($1, "_", $4 ctx, $6 ctx1) }
-  | LAMBDA UCID OKind DOT Term
+  | LAMBDA UCID OType DOT Term
       { fun ctx ->
           let ctx1 = addname ctx $2.v in
           TmTAbs($1,$2.v,$3 ctx,$5 ctx1) }
@@ -212,6 +210,24 @@ ATerm :
   | LCID
       { fun ctx ->
           TmVar($1.i, name2index $1.i ctx $1.v, ctxlength ctx) }
+
+AKind :
+    STAR { fun ctx -> KnStar }
+  | LPAREN Kind RPAREN  { $2 }
+
+OKind :
+  /* empty */
+     { fun ctx -> KnStar}
+| COLONCOLON Kind
+     { $2 }
+
+TyBinder :
+    /* empty */
+      { fun ctx -> TyVarBind(TyTop) }
+  | LEQ Type
+      { fun ctx -> TyVarBind($2 ctx) }
+  | COLONCOLON Kind
+      { fun ctx -> TyVarBind(maketop ($2 ctx)) }
 
 AppType :
     AppType AType { fun ctx -> TyApp($1 ctx,$2 ctx) }

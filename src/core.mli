@@ -8,6 +8,8 @@ open Support.Error
 
 val eval : context -> term -> term
 val typeof : context -> term -> ty
-val kindof : context -> ty -> kind
+val subtype : context -> ty -> ty -> bool
 val tyeqv : context -> ty -> ty -> bool
+val kindof : context -> ty -> kind
+val lcst : context -> ty -> ty
 val simplifyty : context -> ty -> ty

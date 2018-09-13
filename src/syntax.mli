@@ -9,9 +9,10 @@ type kind =
   | KnArr of kind * kind
 
 type ty =
-    TyVar of int * int
+    TyTop
+  | TyVar of int * int
   | TyArr of ty * ty
-  | TyAll of string * kind * ty
+  | TyAll of string * ty * ty
   | TyAbs of string * kind * ty
   | TyApp of ty * ty
 
@@ -19,13 +20,13 @@ type term =
     TmVar of info * int * int
   | TmAbs of info * string * ty * term
   | TmApp of info * term * term
-  | TmTAbs of info * string * kind * term
+  | TmTAbs of info * string * ty * term
   | TmTApp of info * term * ty
 
 type binding =
     NameBind
-  | TyVarBind of kind
   | VarBind of ty
+  | TyVarBind of ty
 
 type command =
   | Eval of info * term
@@ -59,4 +60,4 @@ val prbinding : context -> binding -> unit
 
 (* Misc *)
 val tmInfo: term -> info
-
+val maketop: kind -> ty

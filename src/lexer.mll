@@ -11,8 +11,10 @@ open Support.Error
 
 let reservedWords = [
   (* Keywords *)
-  ("type", fun i -> Parser.TYPE i);
   ("lambda", fun i -> Parser.LAMBDA i);
+  ("Top", fun i -> Parser.TTOP i);
+  ("<:", fun i -> Parser.LEQ i);
+  ("type", fun i -> Parser.TYPE i);
   ("All", fun i -> Parser.ALL i);
 
   (* Symbols *)

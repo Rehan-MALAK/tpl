@@ -55,10 +55,13 @@ let rec tyeqv ctx tyS tyT =
   let tyS = simplifyty ctx tyS in
   let tyT = simplifyty ctx tyT in
   match (tyS,tyT) with
-    (TyVar(i,_),TyVar(j,_)) -> i=j
-  | (TyAll(tyX1,knK1,tyS2),TyAll(_,knK2,tyT2)) ->
+    (TyArr(tyS1,tyS2),TyArr(tyT1,tyT2)) ->
+       (tyeqv ctx tyS1 tyT1) && (tyeqv ctx tyS2 tyT2)
+  | (TyTop,TyTop) -> true
+  | (TyVar(i,_),TyVar(j,_)) -> i=j
+  | (TyAll(tyX1,tyS1,tyS2),TyAll(_,tyT1,tyT2)) ->
        let ctx1 = addname ctx tyX1 in
-       (=) knK1 knK2 && tyeqv ctx1 tyS2 tyT2
+       tyeqv ctx tyS1 tyT1 && tyeqv ctx1 tyS2 tyT2
   | (TyAbs(tyX1,knKS1,tyS2),TyAbs(_,knKT1,tyT2)) ->
        ((=) knKS1 knKT1)
       &&
@@ -66,26 +69,24 @@ let rec tyeqv ctx tyS tyT =
         tyeqv ctx tyS2 tyT2)
   | (TyApp(tyS1,tyS2),TyApp(tyT1,tyT2)) ->
        (tyeqv ctx tyS1 tyT1) && (tyeqv ctx tyS2 tyT2)
-  | (TyArr(tyS1,tyS2),TyArr(tyT1,tyT2)) ->
-       (tyeqv ctx tyS1 tyT1) && (tyeqv ctx tyS2 tyT2)
   | _ -> false
 
-let getkind fi ctx i =
+let rec getkind fi ctx i =
   match getbinding fi ctx i with
-      TyVarBind(knK) -> knK
+      TyVarBind(tyT) -> kindof ctx tyT
     | _ -> error fi ("getkind: Wrong kind of binding for variable "
                      ^ (index2name fi ctx i))
 
-let rec kindof ctx tyT = match tyT with
+and kindof ctx tyT = match tyT with
     TyVar(i,_) ->
       let knK = getkind dummyinfo ctx i
       in knK
-  | TyAll(tyX,knK1,tyT2) ->
-      let ctx' = addbinding ctx tyX (TyVarBind knK1) in
+  | TyAll(tyX,tyT1,tyT2) ->
+      let ctx' = addbinding ctx tyX (TyVarBind tyT1) in
       if kindof ctx' tyT2 <> KnStar then error dummyinfo "Kind * expected";
       KnStar
   | TyAbs(tyX,knK1,tyT2) ->
-      let ctx' = addbinding ctx tyX (TyVarBind(knK1)) in
+      let ctx' = addbinding ctx tyX (TyVarBind(maketop knK1)) in
       let knK2 = kindof ctx' tyT2 in
       KnArr(knK1,knK2)
   | TyApp(tyT1,tyT2) ->
@@ -107,7 +108,44 @@ let checkkindstar fi ctx tyT =
   if k = KnStar then ()
   else error fi "Kind * expected"
 
+(* ------------------------   SUBTYPING  ------------------------ *)
+
+let rec promote ctx t = match t with
+   TyVar(i,_) ->
+     (match getbinding dummyinfo ctx i with
+         TyVarBind(tyT) -> tyT
+       | _ -> raise NoRuleApplies)
+ | TyApp(tyS,tyT) -> TyApp(promote ctx tyS,tyT)
+ | _ -> raise NoRuleApplies
+
+let rec subtype ctx tyS tyT =
+   tyeqv ctx tyS tyT ||
+   let tyS = simplifyty ctx tyS in
+   let tyT = simplifyty ctx tyT in
+   match (tyS,tyT) with
+     (_,TyTop) ->
+       true
+   | (TyArr(tyS1,tyS2),TyArr(tyT1,tyT2)) ->
+       (subtype ctx tyT1 tyS1) && (subtype ctx tyS2 tyT2)
+   | (TyVar(_,_),_) -> subtype ctx (promote ctx tyS) tyT
+   | (TyAll(tyX1,tyS1,tyS2),TyAll(_,tyT1,tyT2)) ->
+        (subtype ctx tyS1 tyT1 && subtype ctx tyT1 tyS1) &&
+        let ctx1 = addbinding ctx tyX1 (TyVarBind(tyT1)) in
+        subtype ctx1 tyS2 tyT2
+   | (TyAbs(tyX,knKS1,tyS2),TyAbs(_,knKT1,tyT2)) ->
+        (=) knKS1 knKT1 &&
+        let ctx = addbinding ctx tyX (TyVarBind(maketop knKS1)) in
+        subtype ctx tyS2 tyT2
+   | (TyApp(_,_),_) -> subtype ctx (promote ctx tyS) tyT
+   | (_,_) ->
+       false
+
 (* ------------------------   TYPING  ------------------------ *)
+
+let rec lcst ctx tyS =
+  let tyS = simplifyty ctx tyS in
+  try lcst ctx (promote ctx tyS)
+  with NoRuleApplies -> tyS
 
 let rec typeof ctx t =
   match t with
@@ -120,21 +158,20 @@ let rec typeof ctx t =
   | TmApp(fi,t1,t2) ->
       let tyT1 = typeof ctx t1 in
       let tyT2 = typeof ctx t2 in
-      (match simplifyty ctx tyT1 with
+      (match lcst ctx tyT1 with
           TyArr(tyT11,tyT12) ->
-            if tyeqv ctx tyT2 tyT11 then tyT12
+            if subtype ctx tyT2 tyT11 then tyT12
             else error fi "parameter type mismatch"
         | _ -> error fi "arrow type expected")
-  | TmTAbs(fi,tyX,knK1,t2) ->
-      let ctx = addbinding ctx tyX (TyVarBind(knK1)) in
+  | TmTAbs(fi,tyX,tyT1,t2) ->
+      let ctx = addbinding ctx tyX (TyVarBind(tyT1)) in
       let tyT2 = typeof ctx t2 in
-      TyAll(tyX,knK1,tyT2)
+      TyAll(tyX,tyT1,tyT2)
   | TmTApp(fi,t1,tyT2) ->
-      let knKT2 = kindof ctx tyT2 in
       let tyT1 = typeof ctx t1 in
-      (match simplifyty ctx tyT1 with
-           TyAll(_,knK11,tyT12) ->
-             if knK11 <> knKT2 then
-               error fi "Type argument has wrong kind";
+      (match lcst ctx tyT1 with
+           TyAll(_,tyT11,tyT12) ->
+             if not(subtype ctx tyT2 tyT11) then
+                  error fi "type parameter type mismatch";
              typeSubstTop tyT2 tyT12
          | _ -> error fi "universal type expected")

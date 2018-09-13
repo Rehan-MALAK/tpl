@@ -52,8 +52,8 @@ let alreadyImported = ref ([] : string list)
 
 let prbindingty ctx b = match b with
     NameBind -> ()
-  | TyVarBind(knK) -> pr ": "; printkn ctx knK
   | VarBind(tyT) -> pr ": "; printty ctx tyT
+  | TyVarBind(tyS) -> pr "<: ";printty ctx tyS
 
 let rec process_command ctx cmd = match cmd with
   | Eval(fi,t) ->
