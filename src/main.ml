@@ -50,38 +50,57 @@ in
 
 let alreadyImported = ref ([] : string list)
 
+let checkbinding fi ctx b = match b with
+    NameBind -> NameBind
+  | VarBind(tyT) -> VarBind(tyT)
+  | TmAbbBind(t,None) -> TmAbbBind(t, Some(typeof ctx t))
+  | TmAbbBind(t,Some(tyT)) ->
+     let tyT' = typeof ctx t in
+     if subtype ctx tyT' tyT then TmAbbBind(t,Some(tyT))
+     else error fi "Type of binding does not match declared type"
+  | TyVarBind -> TyVarBind
+  | TyAbbBind(tyT) -> TyAbbBind(tyT)
+
 let prbindingty ctx b = match b with
     NameBind -> ()
-  | VarBind(tyT) -> pr ": "; printty tyT
+  | TyVarBind -> ()
+  | VarBind(tyT) -> pr ": "; printty ctx tyT
+  | TmAbbBind(t, tyT_opt) -> pr ": ";
+     (match tyT_opt with
+         None -> printty ctx (typeof ctx t)
+       | Some(tyT) -> printty ctx tyT)
+  | TyAbbBind(tyT) -> pr ":: *"
 
-let rec process_command ctx cmd = match cmd with
+let rec process_command (ctx,store) cmd = match cmd with
   | Eval(fi,t) ->
       let tyT = typeof ctx t in
-      let t' = eval ctx t in
+      let t',store  = eval ctx store t in
       printtm_ATerm true ctx t';
       print_break 1 2;
       pr ": ";
-      printty tyT;
+      printty ctx tyT;
       force_newline();
-      ctx
+      (ctx,store)
   | Bind(fi,x,bind) ->
-      pr x; pr " "; prbindingty ctx bind; force_newline();
-      addbinding ctx x bind
+      let bind = checkbinding fi ctx bind in
+      let bind',store' = evalbinding ctx store bind in
+      pr x; pr " "; prbindingty ctx bind'; force_newline();
+      addbinding ctx x bind', (shiftstore 1 store')
 
-let process_file f ctx =
+let process_file f (ctx,store) =
   alreadyImported := f :: !alreadyImported;
   let cmds,_ = parseFile f ctx in
-  let g ctx c =
+  let g (ctx,store) c =
     open_hvbox 0;
-    let results = process_command ctx c in
+    let results = process_command (ctx,store) c in
     print_flush();
     results
   in
-    List.fold_left g ctx cmds
+    List.fold_left g (ctx,store) cmds
 
 let main () =
   let inFile = parseArgs() in
-  let _ = process_file inFile emptycontext in
+  let _ = process_file inFile (emptycontext, emptystore) in
   ()
 
 let () = set_max_boxes 1000
