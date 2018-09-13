@@ -6,13 +6,19 @@ open Support.Error
 (* Data type definitions *)
 type ty =
     TyTop
-  | TyBot
   | TyArr of ty * ty
+  | TyRecord of (string * ty) list
+  | TyBool
 
 type term =
     TmVar of info * int * int
   | TmAbs of info * string * ty * term
   | TmApp of info * term * term
+  | TmRecord of info * (string * term) list
+  | TmProj of info * term * string
+  | TmTrue of info
+  | TmFalse of info
+  | TmIf of info * term * term * term
 
 type binding =
     NameBind
