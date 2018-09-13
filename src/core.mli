@@ -6,5 +6,5 @@
 open Syntax
 open Support.Error
 
-val eval : term -> term
-val typeof : term -> ty
+val eval : context -> term -> term
+val typeof : context -> term -> ty

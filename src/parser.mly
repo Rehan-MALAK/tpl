@@ -22,16 +22,13 @@ open Syntax
  */
 
 /* Keyword tokens */
+%token <Support.Error.info> LAMBDA
 %token <Support.Error.info> IF
 %token <Support.Error.info> THEN
 %token <Support.Error.info> ELSE
 %token <Support.Error.info> TRUE
 %token <Support.Error.info> FALSE
 %token <Support.Error.info> BOOL
-%token <Support.Error.info> SUCC
-%token <Support.Error.info> PRED
-%token <Support.Error.info> ISZERO
-%token <Support.Error.info> NAT
 
 /* Identifier and constant value tokens */
 %token <string Support.Error.withinfo> UCID  /* uppercase-initial */
@@ -82,11 +79,21 @@ open Syntax
 /* ---------------------------------------------------------------------- */
 /* The starting production of the generated parser is the syntactic class
    toplevel.  The type that is returned when a toplevel is recognized is
-   Syntax.command list.
+     Syntax.context -> (Syntax.command list * Syntax.context)
+   that is, the parser returns to the user program a function that,
+   when given a naming context, returns a fully parsed list of
+   Syntax.commands and the new naming context that results when
+   all the names bound in these commands are defined.
+
+   All of the syntactic productions in the parser follow the same pattern:
+   they take a context as argument and return a fully parsed abstract
+   syntax tree (and, if they involve any constructs that bind variables
+   in some following phrase, a new context).
+
 */
 
 %start toplevel
-%type < Syntax.command list > toplevel
+%type < Syntax.context -> (Syntax.command list * Syntax.context) > toplevel
 %%
 
 /* ---------------------------------------------------------------------- */
@@ -96,50 +103,28 @@ open Syntax
    by a semicolon. */
 toplevel :
     EOF
-      { [] }
+      { fun ctx -> [],ctx }
   | Command SEMI toplevel
-      { let cmd = $1 in
-          let cmds = $3 in
-          cmd::cmds }
+      { fun ctx ->
+          let cmd,ctx = $1 ctx in
+          let cmds,ctx = $3 ctx in
+          cmd::cmds,ctx }
 
 /* A top-level command */
 Command :
   | Term
-      { (let t = $1 in Eval(tmInfo t,t)) }
+      { fun ctx -> (let t = $1 ctx in Eval(tmInfo t,t)),ctx }
+  | LCID Binder
+      { fun ctx -> ((Bind($1.i,$1.v,$2 ctx)), addname ctx $1.v) }
 
-Term :
-    AppTerm
-      { $1 }
-  | IF Term THEN Term ELSE Term
-      { TmIf($1, $2, $4, $6) }
-
-AppTerm :
-    ATerm
-      { $1 }
-  | SUCC ATerm
-      { TmSucc($1, $2) }
-  | PRED ATerm
-      { TmPred($1, $2) }
-  | ISZERO ATerm
-      { TmIsZero($1, $2) }
-
-/* Atomic terms are ones that never require extra parentheses */
-ATerm :
-    LPAREN Term RPAREN
-      { $2 }
-  | TRUE
-      { TmTrue($1) }
-  | FALSE
-      { TmFalse($1) }
-  | INTV
-      { let rec f n = match n with
-              0 -> TmZero($1.i)
-            | n -> TmSucc($1.i, f (n-1))
-          in f $1.v }
+/* Right-hand sides of top-level bindings */
+Binder :
+    COLON Type
+      { fun ctx -> VarBind ($2 ctx)}
 
 /* All type expressions */
 Type :
-    AType
+    ArrowType
                 { $1 }
 
 /* Atomic types are those that never need extra parentheses */
@@ -147,9 +132,50 @@ AType :
     LPAREN Type RPAREN
            { $2 }
   | BOOL
-      { TyBool }
-  | NAT
-      { TyNat }
+      { fun ctx -> TyBool }
+
+/* An "arrow type" is a sequence of atomic types separated by
+   arrows. */
+ArrowType :
+    AType ARROW ArrowType
+     { fun ctx -> TyArr($1 ctx, $3 ctx) }
+  | AType
+            { $1 }
+
+Term :
+    AppTerm
+      { $1 }
+  | LAMBDA LCID COLON Type DOT Term
+      { fun ctx ->
+          let ctx1 = addname ctx $2.v in
+          TmAbs($1, $2.v, $4 ctx, $6 ctx1) }
+  | LAMBDA USCORE COLON Type DOT Term
+      { fun ctx ->
+          let ctx1 = addname ctx "_" in
+          TmAbs($1, "_", $4 ctx, $6 ctx1) }
+  | IF Term THEN Term ELSE Term
+      { fun ctx -> TmIf($1, $2 ctx, $4 ctx, $6 ctx) }
+
+AppTerm :
+    ATerm
+      { $1 }
+  | AppTerm ATerm
+      { fun ctx ->
+          let e1 = $1 ctx in
+          let e2 = $2 ctx in
+          TmApp(tmInfo e1,e1,e2) }
+
+/* Atomic terms are ones that never require extra parentheses */
+ATerm :
+    LPAREN Term RPAREN
+      { $2 }
+  | LCID
+      { fun ctx ->
+          TmVar($1.i, name2index $1.i ctx $1.v, ctxlength ctx) }
+  | TRUE
+      { fun ctx -> TmTrue($1) }
+  | FALSE
+      { fun ctx -> TmFalse($1) }
 
 
 /*   */
