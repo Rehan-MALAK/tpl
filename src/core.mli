@@ -6,12 +6,9 @@
 open Syntax
 open Support.Error
 
+val eval : context -> term -> term
 val typeof : context -> term -> ty
 val subtype : context -> ty -> ty -> bool
 val tyeqv : context -> ty -> ty -> bool
 val simplifyty : context -> ty -> ty
-type store
-val emptystore : store
-val shiftstore : int -> store -> store
-val eval : context -> store -> term -> term * store
-val evalbinding : context -> store -> binding -> binding * store
+val evalbinding : context -> binding -> binding
