@@ -125,30 +125,29 @@ let rec eval ctx t =
       in eval ctx t'
   with NoRuleApplies -> t
 
-(* ------------------------   SUBTYPING  ------------------------ *)
-
-let promote ctx t = match t with
-   TyVar(i,_) ->
-     (match getbinding dummyinfo ctx i with
-         TyVarBind(tyT) -> tyT
-       | _ -> raise NoRuleApplies)
- | _ -> raise NoRuleApplies
+(* ------------------------   KINDING  ------------------------ *)
 
 let istyabb ctx i =
   match getbinding dummyinfo ctx i with
-    TyAbbBind(tyT) -> true
+    TyAbbBind(tyT,_) -> true
   | _ -> false
 
 let gettyabb ctx i =
   match getbinding dummyinfo ctx i with
-    TyAbbBind(tyT) -> tyT
+    TyAbbBind(tyT,_) -> tyT
   | _ -> raise NoRuleApplies
 
 let rec computety ctx tyT = match tyT with
     TyVar(i,_) when istyabb ctx i -> gettyabb ctx i
+  | TyApp(TyAbs(_,_,tyT12),tyT2) -> typeSubstTop tyT2 tyT12
   | _ -> raise NoRuleApplies
 
 let rec simplifyty ctx tyT =
+  let tyT =
+    match tyT with
+        TyApp(tyT1,tyT2) -> TyApp(simplifyty ctx tyT1,tyT2)
+      | tyT -> tyT
+  in
   try
     let tyT' = computety ctx tyT in
     simplifyty ctx tyT'
@@ -172,9 +171,6 @@ let rec tyeqv ctx tyS tyT =
   | (TyVar(i,_),TyVar(j,_)) -> i=j
   | (TyBool,TyBool) -> true
   | (TyNat,TyNat) -> true
-  | (TySome(tyX1,tyS1,tyS2),TySome(_,tyT1,tyT2)) ->
-       let ctx1 = addname ctx tyX1 in
-       tyeqv ctx tyS1 tyT1 && tyeqv ctx1 tyS2 tyT2
   | (TyRecord(fields1),TyRecord(fields2)) ->
        List.length fields1 = List.length fields2
        &&
@@ -187,7 +183,76 @@ let rec tyeqv ctx tyS tyT =
   | (TyAll(tyX1,tyS1,tyS2),TyAll(_,tyT1,tyT2)) ->
        let ctx1 = addname ctx tyX1 in
        tyeqv ctx tyS1 tyT1 && tyeqv ctx1 tyS2 tyT2
+  | (TySome(tyX1,tyS1,tyS2),TySome(_,tyT1,tyT2)) ->
+       let ctx1 = addname ctx tyX1 in
+       tyeqv ctx tyS1 tyT1 && tyeqv ctx1 tyS2 tyT2
+  | (TyAbs(tyX1,knKS1,tyS2),TyAbs(_,knKT1,tyT2)) ->
+       ((=) knKS1 knKT1)
+      &&
+       (let ctx = addname ctx tyX1 in
+        tyeqv ctx tyS2 tyT2)
+  | (TyApp(tyS1,tyS2),TyApp(tyT1,tyT2)) ->
+       (tyeqv ctx tyS1 tyT1) && (tyeqv ctx tyS2 tyT2)
   | _ -> false
+
+let rec getkind fi ctx i =
+  match getbinding fi ctx i with
+      TyVarBind(tyT) -> kindof ctx tyT
+    | TyAbbBind(_,Some(knK)) -> knK
+    | TyAbbBind(_,None) -> error fi ("No kind recorded for variable "
+                                      ^ (index2name fi ctx i))
+    | _ -> error fi ("getkind: Wrong kind of binding for variable "
+                      ^ (index2name fi ctx i))
+
+and kindof ctx tyT = match tyT with
+    TyRecord(fldtys) ->
+      List.iter (fun (l,tyS) ->
+             if kindof ctx tyS<>KnStar then error dummyinfo "Kind * expected")
+        fldtys;
+      KnStar
+  | TyVar(i,_) ->
+      let knK = getkind dummyinfo ctx i
+      in knK
+  | TyAll(tyX,tyT1,tyT2) ->
+      let ctx' = addbinding ctx tyX (TyVarBind tyT1) in
+      if kindof ctx' tyT2 <> KnStar then error dummyinfo "Kind * expected";
+      KnStar
+  | TyAbs(tyX,knK1,tyT2) ->
+      let ctx' = addbinding ctx tyX (TyVarBind(maketop knK1)) in
+      let knK2 = kindof ctx' tyT2 in
+      KnArr(knK1,knK2)
+  | TyApp(tyT1,tyT2) ->
+      let knK1 = kindof ctx tyT1 in
+      let knK2 = kindof ctx tyT2 in
+      (match knK1 with
+          KnArr(knK11,knK12) ->
+            if (=) knK2 knK11 then knK12
+            else error dummyinfo "parameter kind mismatch"
+        | _ -> error dummyinfo "arrow kind expected")
+  | TySome(tyX,tyT1,tyT2) ->
+      let ctx' = addbinding ctx tyX (TyVarBind(tyT1)) in
+      if kindof ctx' tyT2 <> KnStar then error dummyinfo "Kind * expected";
+      KnStar
+  | TyArr(tyT1,tyT2) ->
+      if kindof ctx tyT1 <> KnStar then error dummyinfo "star kind expected";
+      if kindof ctx tyT2 <> KnStar then error dummyinfo "star kind expected";
+      KnStar
+  | _ -> KnStar
+
+let checkkindstar fi ctx tyT =
+  let k = kindof ctx tyT in
+  if k = KnStar then ()
+  else error fi "Kind * expected"
+
+(* ------------------------   SUBTYPING  ------------------------ *)
+
+let rec promote ctx t = match t with
+   TyVar(i,_) ->
+     (match getbinding dummyinfo ctx i with
+         TyVarBind(tyT) -> tyT
+       | _ -> raise NoRuleApplies)
+ | TyApp(tyS,tyT) -> TyApp(promote ctx tyS,tyT)
+ | _ -> raise NoRuleApplies
 
 let rec subtype ctx tyS tyT =
    tyeqv ctx tyS tyT ||
@@ -210,6 +275,11 @@ let rec subtype ctx tyS tyT =
         (subtype ctx tyS1 tyT1 && subtype ctx tyT1 tyS1) &&
         let ctx1 = addbinding ctx tyX1 (TyVarBind(tyT1)) in
         subtype ctx1 tyS2 tyT2
+   | (TyAbs(tyX,knKS1,tyS2),TyAbs(_,knKT1,tyT2)) ->
+        (=) knKS1 knKT1 &&
+        let ctx = addbinding ctx tyX (TyVarBind(maketop knKS1)) in
+        subtype ctx tyS2 tyT2
+   | (TyApp(_,_),_) -> subtype ctx (promote ctx tyS) tyT
    | (TySome(tyX1,tyS1,tyS2),TySome(_,tyT1,tyT2)) ->
         (subtype ctx tyS1 tyT1 && subtype ctx tyT1 tyS1) &&
         let ctx1 = addbinding ctx tyX1 (TyVarBind(tyT1)) in
@@ -296,6 +366,7 @@ let rec typeof ctx t =
       tyT
   | TmVar(fi,i,_) -> getTypeFromContext fi ctx i
   | TmAbs(fi,x,tyT1,t2) ->
+      checkkindstar fi ctx tyT1;
       let ctx' = addbinding ctx x (VarBind(tyT1)) in
       let tyT2 = typeof ctx' t2 in
       TyArr(tyT1, typeShift (-1) tyT2)
@@ -339,6 +410,7 @@ let rec typeof ctx t =
   | TmString _ -> TyString
   | TmUnit(fi) -> TyUnit
   | TmAscribe(fi,t1,tyT) ->
+     checkkindstar fi ctx tyT;
      if subtype ctx (typeof ctx t1) tyT then
        tyT
      else
@@ -372,6 +444,7 @@ let rec typeof ctx t =
       if subtype ctx (typeof ctx t1) TyNat then TyBool
       else error fi "argument of iszero is not a number"
   | TmPack(fi,tyT1,t2,tyT) ->
+      checkkindstar fi ctx tyT;
       (match simplifyty ctx tyT with
           TySome(tyY,tyBound,tyT2) ->
             if not (subtype ctx tyT1 tyBound) then

@@ -4,6 +4,10 @@ open Support.Pervasive
 open Support.Error
 
 (* Data type definitions *)
+type kind =
+    KnStar
+  | KnArr of kind * kind
+
 type ty =
     TyVar of int * int
   | TyId of string
@@ -17,6 +21,8 @@ type ty =
   | TyAll of string * ty * ty
   | TyNat
   | TySome of string * ty * ty
+  | TyAbs of string * kind * ty
+  | TyApp of ty * ty
 
 type term =
     TmVar of info * int * int
@@ -48,7 +54,7 @@ type binding =
     NameBind
   | TyVarBind of ty
   | VarBind of ty
-  | TyAbbBind of ty
+  | TyAbbBind of ty * (kind option)
   | TmAbbBind of term * (ty option)
 
 type command =
@@ -79,8 +85,9 @@ val tytermSubstTop: ty -> term -> term
 val printtm: context -> term -> unit
 val printtm_ATerm: bool -> context -> term -> unit
 val printty : context -> ty -> unit
+val printkn : context -> kind -> unit
 val prbinding : context -> binding -> unit
 
 (* Misc *)
 val tmInfo: term -> info
-
+val maketop: kind -> ty

@@ -5,6 +5,10 @@ open Support.Pervasive
 (* ---------------------------------------------------------------------- *)
 (* Datatypes *)
 
+type kind =
+    KnStar
+  | KnArr of kind * kind
+
 type ty =
     TyVar of int * int
   | TyId of string
@@ -18,6 +22,8 @@ type ty =
   | TyAll of string * ty * ty
   | TyNat
   | TySome of string * ty * ty
+  | TyAbs of string * kind * ty
+  | TyApp of ty * ty
 
 type term =
     TmVar of info * int * int
@@ -49,7 +55,7 @@ type binding =
     NameBind
   | TyVarBind of ty
   | VarBind of ty
-  | TyAbbBind of ty
+  | TyAbbBind of ty * (kind option)
   | TmAbbBind of term * (ty option)
 
 type context = (string * binding) list
@@ -114,6 +120,8 @@ let tymap onvar c tyT =
   | TyAll(tyX,tyT1,tyT2) -> TyAll(tyX,walk c tyT1,walk (c+1) tyT2)
   | TyNat -> TyNat
   | TySome(tyX,tyT1,tyT2) -> TySome(tyX,walk c tyT1,walk (c+1) tyT2)
+  | TyAbs(tyX,knK1,tyT2) -> TyAbs(tyX,knK1,walk (c+1) tyT2)
+  | TyApp(tyT1,tyT2) -> TyApp(walk c tyT1,walk c tyT2)
   in walk c tyT
 
 let tmmap onvar ontype c t =
@@ -170,7 +178,7 @@ let bindingshift d bind =
     NameBind -> NameBind
   | TyVarBind(tyS) -> TyVarBind(typeShift d tyS)
   | VarBind(tyT) -> VarBind(typeShift d tyT)
-  | TyAbbBind(tyT) -> TyAbbBind(typeShift d tyT)
+  | TyAbbBind(tyT,opt) -> TyAbbBind(typeShift d tyT,opt)
   | TmAbbBind(t,tyT_opt) ->
      let tyT_opt' = match tyT_opt with
                       None->None
@@ -224,6 +232,10 @@ let rec getbinding fi ctx i =
      | _ -> error fi
        ("getTypeFromContext: Wrong kind of binding for variable "
          ^ (index2name fi ctx i))
+
+let rec maketop k = match k with
+    KnStar -> TyTop
+  | KnArr(knK1,knK2) -> TyAbs("_",knK1,maketop knK2)
 (* ---------------------------------------------------------------------- *)
 (* Extracting file info *)
 
@@ -279,6 +291,29 @@ let small t =
     TmVar(_,_,_) -> true
   | _ -> false
 
+let rec printkn_kind outer ctx k = match k with
+      knK -> printkn_arrowkind outer ctx knK
+
+and printkn_arrowkind outer ctx k = match k with
+    KnArr(knK1,knK2) ->
+      obox0();
+      printkn_akind false ctx knK1;
+      if outer then pr " ";
+      pr "=>";
+      if outer then print_space() else break();
+      printkn_arrowkind outer ctx knK2;
+      cbox()
+  | knK -> printkn_akind outer ctx knK
+
+and printkn_akind outer ctx k = match k with
+    KnStar -> pr "*"
+  | knK -> pr "("; printkn_kind outer ctx knK; pr ")"
+
+let printkn ctx knK = printkn_kind true ctx knK
+
+let prokn ctx knK =
+  if knK <> KnStar then (pr "::"; printkn_kind false ctx knK)
+
 let rec printty_Type outer ctx tyT = match tyT with
     TyAll(tyX,tyT1,tyT2) ->
       let (ctx1,tyX) = (pickfreshname ctx tyX) in
@@ -288,21 +323,37 @@ let rec printty_Type outer ctx tyT = match tyT with
       print_space ();
       printty_Type outer ctx1 tyT2;
       cbox()
+  | TyAbs(tyX,knK1,tyT2) ->
+      let (ctx',x') = (pickfreshname ctx tyX) in
+      obox(); pr "lambda ";
+      pr x'; prokn ctx knK1;
+      pr "."; if outer then print_space() else break();
+      printty_Type outer ctx' tyT2;
+      cbox()
   | tyT -> printty_ArrowType outer ctx tyT
 
 and printty_ArrowType outer ctx  tyT = match tyT with
     TyArr(tyT1,tyT2) ->
       obox0();
-      printty_AType false ctx tyT1;
+      printty_AppType false ctx tyT1;
       if outer then pr " ";
       pr "->";
       if outer then print_space() else break();
       printty_ArrowType outer ctx tyT2;
       cbox()
-  | tyT -> printty_AType outer ctx tyT
+  | tyT -> printty_AppType outer ctx tyT
 
 and proty ctx tyS =
   if tyS <> TyTop then (pr "<:"; printty_Type false ctx tyS)
+
+and printty_AppType outer ctx k = match k with
+    TyApp(tyT1,tyT2) ->
+      obox0();
+      printty_AppType false ctx tyT1;
+      print_space();
+      printty_AType false ctx tyT2;
+      cbox()
+  | tyT -> printty_AType outer ctx tyT
 
 and printty_AType outer ctx tyT = match tyT with
     TyVar(x,n) ->
@@ -476,7 +527,7 @@ let prbinding ctx b = match b with
     NameBind -> ()
   | TyVarBind(tyS) -> pr "<: ";printty_Type false ctx tyS
   | VarBind(tyT) -> pr ": "; printty ctx tyT
-  | TyAbbBind(tyT) -> pr "= "; printty ctx tyT
+  | TyAbbBind(tyT,_) -> pr "= "; printty ctx tyT
   | TmAbbBind(t,tyT) -> pr "= "; printtm ctx t
 
 

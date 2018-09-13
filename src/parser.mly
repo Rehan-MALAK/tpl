@@ -7,7 +7,9 @@
 open Support.Error
 open Support.Pervasive
 open Syntax
-%}
+let rec addbinders tyT l = match l with
+   [] -> tyT
+ | (tyX,k)::rest -> TyAbs(tyX, k, addbinders tyT rest)%}
 
 /* ---------------------------------------------------------------------- */
 /* Preliminaries */
@@ -151,6 +153,47 @@ Binder :
   | EQ Term
       { fun ctx -> TmAbbBind($2 ctx, None) }
 
+PathTerm :
+    PathTerm DOT LCID
+      { fun ctx ->
+          TmProj($2, $1 ctx, $3.v) }
+  | PathTerm DOT INTV
+      { fun ctx ->
+          TmProj($2, $1 ctx, string_of_int $3.v) }
+  | AscribeTerm
+      { $1 }
+
+AscribeTerm :
+    ATerm AS Type
+      { fun ctx -> TmAscribe($2, $1 ctx, $3 ctx) }
+  | ATerm
+      { $1 }
+
+TermSeq :
+    Term
+      { $1 }
+  | Term SEMI TermSeq
+      { fun ctx ->
+          TmApp($2, TmAbs($2, "_", TyUnit, $3 (addname ctx "_")), $1 ctx) }
+
+/* All kind expressions */
+Kind :
+    ArrowKind
+      { $1 }
+
+OType :
+   /* empty */
+      { fun ctx -> TyTop}
+ | LEQ Type
+      { $2 }
+ | COLONCOLON Kind
+      { fun ctx -> maketop ($2 ctx) }
+
+ArrowKind :
+    AKind DARROW ArrowKind  { fun ctx -> KnArr($1 ctx, $3 ctx) }
+  | AKind
+           { $1 }
+
 /* All type expressions */
 Type :
     ArrowType
@@ -159,6 +202,10 @@ Type :
       { fun ctx ->
           let ctx1 = addname ctx $2.v in
           TyAll($2.v,$3 ctx,$5 ctx1) }
+  | LAMBDA UCID OKind DOT Type
+      { fun ctx ->
+          let ctx1 = addname ctx $2.v in
+          TyAbs($2.v, $3 ctx, $5 ctx1) }
 
 /* Atomic types are those that never need extra parentheses */
 AType :
@@ -189,21 +236,15 @@ AType :
       { fun ctx ->
           let ctx1 = addname ctx $3.v in
           TySome($3.v, $4 ctx, $6 ctx1) }
-
-TyBinder :
-    /* empty */
-      { fun ctx -> TyVarBind(TyTop) }
-  | LEQ Type
-      { fun ctx -> TyVarBind($2 ctx) }
-  | EQ Type
-      { fun ctx -> TyAbbBind($2 ctx) }
+  | TTOP LSQUARE Kind RSQUARE
+      { fun ctx -> maketop ($3 ctx) }
 
 /* An "arrow type" is a sequence of atomic types separated by
    arrows. */
 ArrowType :
-    AType ARROW ArrowType
+    AppType ARROW ArrowType
      { fun ctx -> TyArr($1 ctx, $3 ctx) }
-  | AType
+  | AppType
             { $1 }
 
 Term :
@@ -263,47 +304,6 @@ AppTerm :
   | ISZERO PathTerm
       { fun ctx -> TmIsZero($1, $2 ctx) }
 
-PathTerm :
-    PathTerm DOT LCID
-      { fun ctx ->
-          TmProj($2, $1 ctx, $3.v) }
-  | PathTerm DOT INTV
-      { fun ctx ->
-          TmProj($2, $1 ctx, string_of_int $3.v) }
-  | AscribeTerm
-      { $1 }
-
-FieldTypes :
-    /* empty */
-      { fun ctx i -> [] }
-  | NEFieldTypes
-      { $1 }
-
-NEFieldTypes :
-    FieldType
-      { fun ctx i -> [$1 ctx i] }
-  | FieldType COMMA NEFieldTypes
-      { fun ctx i -> ($1 ctx i) :: ($3 ctx (i+1)) }
-
-FieldType :
-    LCID COLON Type
-      { fun ctx i -> ($1.v, $3 ctx) }
-  | Type
-      { fun ctx i -> (string_of_int i, $1 ctx) }
-
-AscribeTerm :
-    ATerm AS Type
-      { fun ctx -> TmAscribe($2, $1 ctx, $3 ctx) }
-  | ATerm
-      { $1 }
-
-TermSeq :
-    Term
-      { $1 }
-  | Term SEMI TermSeq
-      { fun ctx ->
-          TmApp($2, TmAbs($2, "_", TyUnit, $3 (addname ctx "_")), $1 ctx) }
-
 /* Atomic terms are ones that never require extra parentheses */
 ATerm :
     LPAREN TermSeq RPAREN
@@ -354,11 +354,58 @@ Field :
   | Term
       { fun ctx i -> (string_of_int i, $1 ctx) }
 
-OType :
-   /* empty */
-      { fun ctx -> TyTop}
- | LEQ Type
-      { $2 }
+FieldTypes :
+    /* empty */
+      { fun ctx i -> [] }
+  | NEFieldTypes
+      { $1 }
+
+NEFieldTypes :
+    FieldType
+      { fun ctx i -> [$1 ctx i] }
+  | FieldType COMMA NEFieldTypes
+      { fun ctx i -> ($1 ctx i) :: ($3 ctx (i+1)) }
+
+FieldType :
+    LCID COLON Type
+      { fun ctx i -> ($1.v, $3 ctx) }
+  | Type
+      { fun ctx i -> (string_of_int i, $1 ctx) }
+
+AKind :
+    STAR { fun ctx -> KnStar }
+  | LPAREN Kind RPAREN  { $2 }
+
+OKind :
+  /* empty */
+     { fun ctx -> KnStar}
+| COLONCOLON Kind
+     { $2 }
+
+AppType :
+    AppType AType { fun ctx -> TyApp($1 ctx,$2 ctx) }
+  | AType { $1 }
+
+/* Type arguments on left-hand sides of type abbreviations */
+TyAbbArgs :
+    /* empty */
+      { fun b ctx -> (b, ctx) }
+  | UCID OKind TyAbbArgs
+      { fun b ctx ->
+          let ctx' = (addname ctx $1.v) in
+          $3 (b@[($1.v,$2 ctx)]) ctx' }
+
+TyBinder :
+    /* empty */
+      { fun ctx -> TyVarBind(TyTop) }
+  | LEQ Type
+      { fun ctx -> TyVarBind($2 ctx) }
+  | COLONCOLON Kind
+      { fun ctx -> TyVarBind(maketop ($2 ctx)) }
+  | TyAbbArgs EQ Type
+      { fun ctx ->
+          let (b,ctx') = $1 [] ctx in
+          TyAbbBind(addbinders ($3 ctx') b, None) }
 
 
 /*   */
