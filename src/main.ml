@@ -50,10 +50,26 @@ in
 
 let alreadyImported = ref ([] : string list)
 
+let checkbinding fi ctx b = match b with
+    NameBind -> NameBind
+  | TyVarBind(tyS) -> TyVarBind(tyS)
+  | TyAbbBind(tyT) -> TyAbbBind(tyT)
+  | VarBind(tyT) -> VarBind(tyT)
+  | TmAbbBind(t,None) -> TmAbbBind(t, Some(typeof ctx t))
+  | TmAbbBind(t,Some(tyT)) ->
+     let tyT' = typeof ctx t in
+     if subtype ctx tyT' tyT then TmAbbBind(t,Some(tyT))
+     else error fi "Type of binding does not match declared type"
+
 let prbindingty ctx b = match b with
     NameBind -> ()
   | TyVarBind(tyS) -> pr "<: ";printty ctx tyS
   | VarBind(tyT) -> pr ": "; printty ctx tyT
+  | TyAbbBind(tyT) -> pr ":: *"
+  | TmAbbBind(t, tyT_opt) -> pr ": ";
+     (match tyT_opt with
+         None -> printty ctx (typeof ctx t)
+       | Some(tyT) -> printty ctx tyT)
 
 let rec process_command ctx cmd = match cmd with
   | Eval(fi,t) ->
@@ -66,8 +82,25 @@ let rec process_command ctx cmd = match cmd with
       force_newline();
       ctx
   | Bind(fi,x,bind) ->
-      pr x; pr " "; prbindingty ctx bind; force_newline();
-      addbinding ctx x bind
+      let bind = checkbinding fi ctx bind in
+      let bind' = evalbinding ctx bind in
+      pr x; pr " "; prbindingty ctx bind'; force_newline();
+      addbinding ctx x bind'
+  | SomeBind(fi,tyX,x,t) ->
+     let tyT = typeof ctx t in
+     (match lcst ctx tyT with
+        TySome(_,tyBound,tyBody) ->
+          let t' = eval ctx t in
+          let b = match t' with
+                    TmPack(_,_,t12,_) -> (TmAbbBind(termShift 1 t12,Some(tyBody)))
+                  | _ -> VarBind(tyBody) in
+          let ctx1 = addbinding ctx tyX (TyVarBind tyBound) in
+          let ctx2 = addbinding ctx1 x b in
+
+          pr tyX; force_newline();
+          pr x; pr " : "; printty ctx1 tyBody; force_newline();
+          ctx2
+      | _ -> error fi "existential type expected")
 
 let process_file f ctx =
   alreadyImported := f :: !alreadyImported;
