@@ -8,18 +8,46 @@ open Support.Pervasive
 type ty =
     TyId of string
   | TyVar of int * int
+  | TyRecord of (string * ty) list
   | TyArr of ty * ty
+  | TyFloat
   | TyRec of string * ty
+  | TyNat
+  | TyVariant of (string * ty) list
+  | TyString
+  | TyBool
+  | TyUnit
 
 type term =
-    TmVar of info * int * int
+    TmTrue of info
+  | TmFalse of info
+  | TmIf of info * term * term * term
+  | TmVar of info * int * int
+  | TmString of info * string
+  | TmAscribe of info * term * ty
+  | TmRecord of info * (string * term) list
+  | TmProj of info * term * string
   | TmAbs of info * string * ty * term
   | TmApp of info * term * term
+  | TmFloat of info * float
+  | TmTimesfloat of info * term * term
+  | TmZero of info
+  | TmSucc of info * term
+  | TmPred of info * term
+  | TmIsZero of info * term
+  | TmInert of info * ty
+  | TmCase of info * term * (string * (string * term)) list
+  | TmTag of info * string * term * ty
+  | TmLet of info * string * term * term
+  | TmUnit of info
+  | TmFix of info * term
 
 type binding =
     NameBind
+  | TmAbbBind of term * (ty option)
   | VarBind of ty
   | TyVarBind
+  | TyAbbBind of ty
 
 type context = (string * binding) list
 
@@ -70,17 +98,48 @@ let rec name2index fi ctx x =
 
 let tymap onvar c tyT =
   let rec walk c tyT = match tyT with
-    TyVar(x,n) -> onvar c x n
+    TyString -> TyString
+  | TyFloat -> TyFloat
+  | TyVar(x,n) -> onvar c x n
   | TyRec(x,tyT) -> TyRec(x,walk (c+1) tyT)
   | TyId(b) as tyT -> tyT
+  | TyBool -> TyBool
+  | TyNat -> TyNat
   | TyArr(tyT1,tyT2) -> TyArr(walk c tyT1,walk c tyT2)
+  | TyVariant(fieldtys) -> TyVariant(List.map (fun (li,tyTi) -> (li, walk c tyTi)) fieldtys)
+  | TyRecord(fieldtys) -> TyRecord(List.map (fun (li,tyTi) -> (li, walk c tyTi)) fieldtys)
+  | TyUnit -> TyUnit
   in walk c tyT
 
 let tmmap onvar ontype c t =
   let rec walk c t = match t with
-    TmVar(fi,x,n) -> onvar fi c x n
+    TmInert(fi,tyT) -> TmInert(fi,ontype c tyT)
+  | TmTrue(fi) as t -> t
+  | TmFalse(fi) as t -> t
+  | TmIf(fi,t1,t2,t3) -> TmIf(fi,walk c t1,walk c t2,walk c t3)
+  | TmVar(fi,x,n) -> onvar fi c x n
+  | TmString _ as t -> t
   | TmAbs(fi,x,tyT1,t2) -> TmAbs(fi,x,ontype c tyT1,walk (c+1) t2)
   | TmApp(fi,t1,t2) -> TmApp(fi,walk c t1,walk c t2)
+  | TmAscribe(fi,t1,tyT1) -> TmAscribe(fi,walk c t1,ontype c tyT1)
+  | TmFloat _ as t -> t
+  | TmTimesfloat(fi,t1,t2) -> TmTimesfloat(fi, walk c t1, walk c t2)
+  | TmZero(fi)      -> TmZero(fi)
+  | TmSucc(fi,t1)   -> TmSucc(fi, walk c t1)
+  | TmPred(fi,t1)   -> TmPred(fi, walk c t1)
+  | TmIsZero(fi,t1) -> TmIsZero(fi, walk c t1)
+  | TmTag(fi,l,t1,tyT) -> TmTag(fi, l, walk c t1, ontype c tyT)
+  | TmCase(fi,t,cases) ->
+      TmCase(fi, walk c t,
+             List.map (fun (li,(xi,ti)) -> (li, (xi,walk (c+1) ti)))
+               cases)
+  | TmProj(fi,t1,l) -> TmProj(fi,walk c t1,l)
+  | TmRecord(fi,fields) -> TmRecord(fi,List.map (fun (li,ti) ->
+                                               (li,walk c ti))
+                                    fields)
+  | TmLet(fi,x,t1,t2) -> TmLet(fi,x,walk c t1,walk (c+1) t2)
+  | TmUnit(fi) as t -> t
+  | TmFix(fi,t1) -> TmFix(fi,walk c t1)
   in walk c t
 
 let typeShiftAbove d c tyT =
@@ -102,8 +161,14 @@ let typeShift d tyT = typeShiftAbove d 0 tyT
 let bindingshift d bind =
   match bind with
     NameBind -> NameBind
-  | TyVarBind -> TyVarBind
+  | TmAbbBind(t,tyT_opt) ->
+     let tyT_opt' = match tyT_opt with
+                      None->None
+                    | Some(tyT) -> Some(typeShift d tyT) in
+     TmAbbBind(termShift d t, tyT_opt')
   | VarBind(tyT) -> VarBind(typeShift d tyT)
+  | TyVarBind -> TyVarBind
+  | TyAbbBind(tyT) -> TyAbbBind(typeShift d tyT)
 
 (* ---------------------------------------------------------------------- *)
 (* Substitution *)
@@ -145,17 +210,39 @@ let rec getbinding fi ctx i =
     error fi (msg i (List.length ctx))
  let getTypeFromContext fi ctx i =
    match getbinding fi ctx i with
-       VarBind(tyT) -> tyT
+         VarBind(tyT) -> tyT
+     | TmAbbBind(_,Some(tyT)) -> tyT
+     | TmAbbBind(_,None) -> error fi ("No type recorded for variable "
+                                        ^ (index2name fi ctx i))
      | _ -> error fi
        ("getTypeFromContext: Wrong kind of binding for variable "
-        ^ (index2name fi ctx i))
+         ^ (index2name fi ctx i))
 (* ---------------------------------------------------------------------- *)
 (* Extracting file info *)
 
 let tmInfo t = match t with
-    TmVar(fi,_,_) -> fi
+    TmInert(fi,_) -> fi
+  | TmTrue(fi) -> fi
+  | TmFalse(fi) -> fi
+  | TmIf(fi,_,_,_) -> fi
+  | TmVar(fi,_,_) -> fi
+  | TmString(fi,_) -> fi
+  | TmAscribe(fi,_,_) -> fi
+  | TmProj(fi,_,_) -> fi
+  | TmRecord(fi,_) -> fi
   | TmAbs(fi,_,_,_) -> fi
   | TmApp(fi, _, _) -> fi
+  | TmFloat(fi,_) -> fi
+  | TmTimesfloat(fi,_,_) -> fi
+  | TmZero(fi) -> fi
+  | TmSucc(fi,_) -> fi
+  | TmPred(fi,_) -> fi
+  | TmIsZero(fi,_) -> fi
+  | TmTag(fi,_,_,_) -> fi
+  | TmCase(fi,_,_) -> fi
+  | TmLet(fi,_,_,_) -> fi
+  | TmUnit(fi) -> fi
+  | TmFix(fi,_) -> fi
 
 (* ---------------------------------------------------------------------- *)
 (* Printing *)
@@ -204,7 +291,20 @@ and printty_ArrowType outer ctx  tyT = match tyT with
   | tyT -> printty_AType outer ctx tyT
 
 and printty_AType outer ctx tyT = match tyT with
-    TyId(b) -> pr b
+    TyString -> pr "String"
+  | TyRecord(fields) ->
+        let pf i (li,tyTi) =
+          if (li <> ((string_of_int i))) then (pr li; pr ":");
+          printty_Type false ctx tyTi
+        in let rec p i l = match l with
+            [] -> ()
+          | [f] -> pf i f
+          | f::rest ->
+              pf i f; pr","; if outer then print_space() else break();
+              p (i+1) rest
+        in pr "{"; open_hovbox 0; p 1 fields; pr "}"; cbox()
+  | TyId(b) -> pr b
+  | TyFloat -> pr "Float"
   | TyVar(x,n) ->
       if ctxlength ctx = n then
         pr (index2name dummyinfo ctx x)
@@ -213,18 +313,68 @@ and printty_AType outer ctx tyT = match tyT with
             ^ " in {"
             ^ (List.fold_left (fun s (x,_) -> s ^ " " ^ x) "" ctx)
             ^ " }]")
+  | TyBool -> pr "Bool"
+  | TyNat -> pr "Nat"
+  | TyVariant(fields) ->
+        let pf i (li,tyTi) =
+          if (li <> ((string_of_int i))) then (pr li; pr ":");
+          printty_Type false ctx tyTi
+        in let rec p i l = match l with
+            [] -> ()
+          | [f] -> pf i f
+          | f::rest ->
+              pf i f; pr","; if outer then print_space() else break();
+              p (i+1) rest
+        in pr "<"; open_hovbox 0; p 1 fields; pr ">"; cbox()
+  | TyUnit -> pr "Unit"
   | tyT -> pr "("; printty_Type outer ctx tyT; pr ")"
 
 let printty ctx tyT = printty_Type true ctx tyT
 
 let rec printtm_Term outer ctx t = match t with
-    TmAbs(fi,x,tyT1,t2) ->
+    TmIf(fi, t1, t2, t3) ->
+       obox0();
+       pr "if ";
+       printtm_Term false ctx t1;
+       print_space();
+       pr "then ";
+       printtm_Term false ctx t2;
+       print_space();
+       pr "else ";
+       printtm_Term false ctx t3;
+       cbox()
+  | TmAbs(fi,x,tyT1,t2) ->
       (let (ctx',x') = (pickfreshname ctx x) in
          obox(); pr "lambda ";
          pr x'; pr ":"; printty_Type false ctx tyT1; pr ".";
          if (small t2) && not outer then break() else print_space();
          printtm_Term outer ctx' t2;
          cbox())
+  | TmCase(_, t, cases) ->
+      obox();
+      pr "case "; printtm_Term false ctx t; pr " of";
+      print_space();
+      let pc (li,(xi,ti)) = let (ctx',xi') = (pickfreshname ctx xi) in
+                              pr "<"; pr li; pr "="; pr xi'; pr ">==>";
+                              printtm_Term false ctx' ti
+      in let rec p l = match l with
+            [] -> ()
+          | [c] -> pc c
+          | c::rest -> pc c; print_space(); pr "| "; p rest
+      in p cases;
+      cbox()
+  | TmLet(fi, x, t1, t2) ->
+       obox0();
+       pr "let "; pr x; pr " = ";
+       printtm_Term false ctx t1;
+       print_space(); pr "in"; print_space();
+       printtm_Term false (addname ctx x) t2;
+       cbox()
+  | TmFix(fi, t1) ->
+       obox();
+       pr "fix ";
+       printtm_Term false ctx t1;
+       cbox()
   | t -> printtm_AppTerm outer ctx t
 
 and printtm_AppTerm outer ctx t = match t with
@@ -234,10 +384,34 @@ and printtm_AppTerm outer ctx t = match t with
       print_space();
       printtm_ATerm false ctx t2;
       cbox()
+  | TmTimesfloat(_,t1,t2) ->
+       pr "timesfloat "; printtm_ATerm false ctx t2;
+       pr " "; printtm_ATerm false ctx t2
+  | TmPred(_,t1) ->
+       pr "pred "; printtm_ATerm false ctx t1
+  | TmIsZero(_,t1) ->
+       pr "iszero "; printtm_ATerm false ctx t1
+  | t -> printtm_PathTerm outer ctx t
+
+and printtm_AscribeTerm outer ctx t = match t with
+    TmAscribe(_,t1,tyT1) ->
+      obox0();
+      printtm_AppTerm false ctx t1;
+      print_space(); pr "as ";
+      printty_Type false ctx tyT1;
+      cbox()
   | t -> printtm_ATerm outer ctx t
 
+and printtm_PathTerm outer ctx t = match t with
+    TmProj(_, t1, l) ->
+      printtm_ATerm false ctx t1; pr "."; pr l
+  | t -> printtm_AscribeTerm outer ctx t
+
 and printtm_ATerm outer ctx t = match t with
-    TmVar(fi,x,n) ->
+    TmInert(_,tyT) -> pr "inert["; printty_Type false ctx tyT; pr "]"
+  | TmTrue(_) -> pr "true"
+  | TmFalse(_) -> pr "false"
+  | TmVar(fi,x,n) ->
       if ctxlength ctx = n then
         pr (index2name fi ctx x)
       else
@@ -245,13 +419,43 @@ and printtm_ATerm outer ctx t = match t with
             ^ " in {"
             ^ (List.fold_left (fun s (x,_) -> s ^ " " ^ x) "" ctx)
             ^ " }]")
+  | TmString(_,s) -> pr ("\"" ^ s ^ "\"")
+  | TmRecord(fi, fields) ->
+       let pf i (li,ti) =
+         if (li <> ((string_of_int i))) then (pr li; pr "=");
+         printtm_Term false ctx ti
+       in let rec p i l = match l with
+           [] -> ()
+         | [f] -> pf i f
+         | f::rest ->
+             pf i f; pr","; if outer then print_space() else break();
+             p (i+1) rest
+       in pr "{"; open_hovbox 0; p 1 fields; pr "}"; cbox()
+  | TmFloat(_,s) -> pr (string_of_float s)
+  | TmZero(fi) ->
+       pr "0"
+  | TmSucc(_,t1) ->
+     let rec f n t = match t with
+         TmZero(_) -> pr (string_of_int n)
+       | TmSucc(_,s) -> f (n+1) s
+       | _ -> (pr "(succ "; printtm_ATerm false ctx t1; pr ")")
+     in f 1 t1
+  | TmTag(fi, l, t, tyT) ->
+      obox();
+      pr "<"; pr l; pr "="; printtm_Term false ctx t; pr ">";
+      print_space();
+      pr "as "; printty_Type outer ctx tyT;
+      cbox();
+  | TmUnit(_) -> pr "unit"
   | t -> pr "("; printtm_Term outer ctx t; pr ")"
 
 let printtm ctx t = printtm_Term true ctx t
 
 let prbinding ctx b = match b with
     NameBind -> ()
+  | TmAbbBind(t,tyT) -> pr "= "; printtm ctx t
   | VarBind(tyT) -> pr ": "; printty ctx tyT
   | TyVarBind -> ()
+  | TyAbbBind(tyT) -> pr "= "; printty ctx tyT
 
 

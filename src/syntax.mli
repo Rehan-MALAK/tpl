@@ -7,18 +7,46 @@ open Support.Error
 type ty =
     TyId of string
   | TyVar of int * int
+  | TyRecord of (string * ty) list
   | TyArr of ty * ty
+  | TyFloat
   | TyRec of string * ty
+  | TyNat
+  | TyVariant of (string * ty) list
+  | TyString
+  | TyBool
+  | TyUnit
 
 type term =
-    TmVar of info * int * int
+    TmTrue of info
+  | TmFalse of info
+  | TmIf of info * term * term * term
+  | TmVar of info * int * int
+  | TmString of info * string
+  | TmAscribe of info * term * ty
+  | TmRecord of info * (string * term) list
+  | TmProj of info * term * string
   | TmAbs of info * string * ty * term
   | TmApp of info * term * term
+  | TmFloat of info * float
+  | TmTimesfloat of info * term * term
+  | TmZero of info
+  | TmSucc of info * term
+  | TmPred of info * term
+  | TmIsZero of info * term
+  | TmInert of info * ty
+  | TmCase of info * term * (string * (string * term)) list
+  | TmTag of info * string * term * ty
+  | TmLet of info * string * term * term
+  | TmUnit of info
+  | TmFix of info * term
 
 type binding =
     NameBind
+  | TmAbbBind of term * (ty option)
   | VarBind of ty
   | TyVarBind
+  | TyAbbBind of ty
 
 type command =
   | Eval of info * term

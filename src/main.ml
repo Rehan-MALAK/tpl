@@ -50,10 +50,26 @@ in
 
 let alreadyImported = ref ([] : string list)
 
+let checkbinding fi ctx b = match b with
+    NameBind -> NameBind
+  | VarBind(tyT) -> VarBind(tyT)
+  | TmAbbBind(t,None) -> TmAbbBind(t, Some(typeof ctx t))
+  | TmAbbBind(t,Some(tyT)) ->
+     let tyT' = typeof ctx t in
+     if tyeqv ctx tyT' tyT then TmAbbBind(t,Some(tyT))
+     else error fi "Type of binding does not match declared type"
+  | TyVarBind -> TyVarBind
+  | TyAbbBind(tyT) -> TyAbbBind(tyT)
+
 let prbindingty ctx b = match b with
     NameBind -> ()
   | VarBind(tyT) -> pr ": "; printty ctx tyT
+  | TmAbbBind(t, tyT_opt) -> pr ": ";
+     (match tyT_opt with
+         None -> printty ctx (typeof ctx t)
+       | Some(tyT) -> printty ctx tyT)
   | TyVarBind -> ()
+  | TyAbbBind(tyT) -> pr ":: *"
 
 let rec process_command ctx cmd = match cmd with
   | Eval(fi,t) ->
@@ -66,8 +82,10 @@ let rec process_command ctx cmd = match cmd with
       force_newline();
       ctx
   | Bind(fi,x,bind) ->
-      pr x; pr " "; prbindingty ctx bind; force_newline();
-      addbinding ctx x bind
+      let bind = checkbinding fi ctx bind in
+      let bind' = evalbinding ctx bind in
+      pr x; pr " "; prbindingty ctx bind'; force_newline();
+      addbinding ctx x bind'
 
 let process_file f ctx =
   alreadyImported := f :: !alreadyImported;
