@@ -13,18 +13,61 @@ let rec isnumericval ctx t = match t with
   | _ -> false
 
 let rec isval ctx t = match t with
-    TmTrue(_)  -> true
+    TmString _  -> true
+  | TmUnit(_)  -> true
+  | TmTrue(_)  -> true
   | TmFalse(_) -> true
+  | TmFloat _  -> true
   | t when isnumericval ctx t  -> true
   | TmAbs(_,_,_,_) -> true
+  | TmRecord(_,fields) -> List.for_all (fun (l,ti) -> isval ctx ti) fields
+  | TmPack(_,_,v1,_) when isval ctx v1 -> true
+  | TmTAbs(_,_,_) -> true
   | _ -> false
 
 let rec eval1 ctx t = match t with
-    TmLet(fi,x,v1,t2) when isval ctx v1 ->
+    TmApp(fi,TmAbs(_,x,tyT11,t12),v2) when isval ctx v2 ->
+      termSubstTop v2 t12
+  | TmApp(fi,v1,t2) when isval ctx v1 ->
+      let t2' = eval1 ctx t2 in
+      TmApp(fi, v1, t2')
+  | TmApp(fi,t1,t2) ->
+      let t1' = eval1 ctx t1 in
+      TmApp(fi, t1', t2)
+  | TmLet(fi,x,v1,t2) when isval ctx v1 ->
       termSubstTop v1 t2
   | TmLet(fi,x,t1,t2) ->
       let t1' = eval1 ctx t1 in
       TmLet(fi, x, t1', t2)
+  | TmFix(fi,v1) as t when isval ctx v1 ->
+      (match v1 with
+         TmAbs(_,_,_,t12) -> termSubstTop t t12
+       | _ -> raise NoRuleApplies)
+  | TmFix(fi,t1) ->
+      let t1' = eval1 ctx t1
+      in TmFix(fi,t1')
+  | TmAscribe(fi,v1,tyT) when isval ctx v1 ->
+      v1
+  | TmAscribe(fi,t1,tyT) ->
+      let t1' = eval1 ctx t1 in
+      TmAscribe(fi,t1',tyT)
+  | TmRecord(fi,fields) ->
+      let rec evalafield l = match l with
+        [] -> raise NoRuleApplies
+      | (l,vi)::rest when isval ctx vi ->
+          let rest' = evalafield rest in
+          (l,vi)::rest'
+      | (l,ti)::rest ->
+          let ti' = eval1 ctx ti in
+          (l, ti')::rest
+      in let fields' = evalafield fields in
+      TmRecord(fi, fields')
+  | TmProj(fi, (TmRecord(_, fields) as v1), l) when isval ctx v1 ->
+      (try List.assoc l fields
+       with Not_found -> raise NoRuleApplies)
+  | TmProj(fi, t1, l) ->
+      let t1' = eval1 ctx t1 in
+      TmProj(fi, t1', l)
   | TmIf(_,TmTrue(_),t2,t3) ->
       t2
   | TmIf(_,TmFalse(_),t2,t3) ->
@@ -32,6 +75,14 @@ let rec eval1 ctx t = match t with
   | TmIf(fi,t1,t2,t3) ->
       let t1' = eval1 ctx t1 in
       TmIf(fi, t1', t2, t3)
+  | TmTimesfloat(fi,TmFloat(_,f1),TmFloat(_,f2)) ->
+      TmFloat(fi, f1 *. f2)
+  | TmTimesfloat(fi,(TmFloat(_,f1) as t1),t2) ->
+      let t2' = eval1 ctx t2 in
+      TmTimesfloat(fi,t1,t2')
+  | TmTimesfloat(fi,t1,t2) ->
+      let t1' = eval1 ctx t1 in
+      TmTimesfloat(fi,t1',t2)
   | TmSucc(fi,t1) ->
       let t1' = eval1 ctx t1 in
       TmSucc(fi, t1')
@@ -49,14 +100,23 @@ let rec eval1 ctx t = match t with
   | TmIsZero(fi,t1) ->
       let t1' = eval1 ctx t1 in
       TmIsZero(fi, t1')
-  | TmApp(fi,TmAbs(_,x,tyT11,t12),v2) when isval ctx v2 ->
-      termSubstTop v2 t12
-  | TmApp(fi,v1,t2) when isval ctx v1 ->
-      let t2' = eval1 ctx t2 in
-      TmApp(fi, v1, t2')
-  | TmApp(fi,t1,t2) ->
+  | TmUnpack(fi,_,_,TmPack(_,tyT11,v12,_),t2) when isval ctx v12 ->
+      tytermSubstTop tyT11 (termSubstTop (termShift 1 v12) t2)
+  | TmUnpack(fi,tyX,x,t1,t2) ->
       let t1' = eval1 ctx t1 in
-      TmApp(fi, t1', t2)
+      TmUnpack(fi,tyX,x,t1',t2)
+  | TmPack(fi,tyT1,t2,tyT3) ->
+      let t2' = eval1 ctx t2 in
+      TmPack(fi,tyT1,t2',tyT3)
+  | TmVar(fi,n,_) ->
+      (match getbinding fi ctx n with
+          TmAbbBind(t,_) -> t
+        | _ -> raise NoRuleApplies)
+  | TmTApp(fi,TmTAbs(_,x,t11),tyT2) ->
+      tytermSubstTop tyT2 t11
+  | TmTApp(fi,t1,tyT2) ->
+      let t1' = eval1 ctx t1 in
+      TmTApp(fi, t1', tyT2)
   | _ ->
       raise NoRuleApplies
 
@@ -65,127 +125,162 @@ let rec eval ctx t =
       in eval ctx t'
   with NoRuleApplies -> t
 
+let istyabb ctx i =
+  match getbinding dummyinfo ctx i with
+    TyAbbBind(tyT) -> true
+  | _ -> false
+
+let gettyabb ctx i =
+  match getbinding dummyinfo ctx i with
+    TyAbbBind(tyT) -> tyT
+  | _ -> raise NoRuleApplies
+
+let rec computety ctx tyT = match tyT with
+    TyVar(i,_) when istyabb ctx i -> gettyabb ctx i
+  | _ -> raise NoRuleApplies
+
+let rec simplifyty ctx tyT =
+  try
+    let tyT' = computety ctx tyT in
+    simplifyty ctx tyT'
+  with NoRuleApplies -> tyT
+
+let rec tyeqv ctx tyS tyT =
+  let tyS = simplifyty ctx tyS in
+  let tyT = simplifyty ctx tyT in
+  match (tyS,tyT) with
+    (TyString,TyString) -> true
+  | (TyUnit,TyUnit) -> true
+  | (TyId(b1),TyId(b2)) -> b1=b2
+  | (TyFloat,TyFloat) -> true
+  | (TyVar(i,_), _) when istyabb ctx i ->
+      tyeqv ctx (gettyabb ctx i) tyT
+  | (_, TyVar(i,_)) when istyabb ctx i ->
+      tyeqv ctx tyS (gettyabb ctx i)
+  | (TyVar(i,_),TyVar(j,_)) -> i=j
+  | (TyArr(tyS1,tyS2),TyArr(tyT1,tyT2)) ->
+       (tyeqv ctx tyS1 tyT1) && (tyeqv ctx tyS2 tyT2)
+  | (TyBool,TyBool) -> true
+  | (TyNat,TyNat) -> true
+  | (TySome(tyX1,tyS2),TySome(_,tyT2)) ->
+       let ctx1 = addname ctx tyX1 in
+       tyeqv ctx1 tyS2 tyT2
+  | (TyRecord(fields1),TyRecord(fields2)) ->
+       List.length fields1 = List.length fields2
+       &&
+       List.for_all
+         (fun (li2,tyTi2) ->
+            try let (tyTi1) = List.assoc li2 fields1 in
+                tyeqv ctx tyTi1 tyTi2
+            with Not_found -> false)
+         fields2
+  | (TyAll(tyX1,tyS2),TyAll(_,tyT2)) ->
+       let ctx1 = addname ctx tyX1 in
+       tyeqv ctx1 tyS2 tyT2
+  | _ -> false
+
 (* ------------------------   TYPING  ------------------------ *)
 
-type constr = (ty * ty) list
-
-let emptyconstr = []
-let combineconstr = List.append
-
-let prconstr constr =
-  let pc (tyS,tyT) =
-    printty_Type false tyS; pr "="; printty_Type false tyT in
-  let rec f l = match l with
-      [] -> ()
-    | [c] -> pc c
-    | c::rest -> (pc c; pr ", "; f rest)
-  in
-    pr "{"; f constr; pr "}"
-
-type nextuvar = NextUVar of string * uvargenerator
-and uvargenerator = unit -> nextuvar
-
-let uvargen =
-  let rec f n () = NextUVar("?X" ^ string_of_int n, f (n+1))
-  in f 0
-
-let rec recon ctx nextuvar t =
+let rec typeof ctx t =
   match t with
-      TmVar(fi,i,_) ->
-        let tyT = getTypeFromContext fi ctx i in
-        (tyT, nextuvar, [])
-    | TmAbs(fi, x, Some(tyT1), t2) ->
-        let ctx' = addbinding ctx x (VarBind(tyT1)) in
-        let (tyT2,nextuvar2,constr2) = recon ctx' nextuvar t2 in
-        (TyArr(tyT1, tyT2), nextuvar2, constr2)
-    | TmAbs(fi, x, None, t2) ->
-        let NextUVar(u,nextuvar0) = nextuvar() in
-        let tyX = TyId(u) in
-        let ctx' = addbinding ctx x (VarBind(tyX)) in
-        let (tyT2,nextuvar2,constr2) = recon ctx' nextuvar0 t2 in
-        (TyArr(tyX, tyT2), nextuvar2, constr2)
-    | TmApp(fi,t1,t2) ->
-        let (tyT1,nextuvar1,constr1) = recon ctx nextuvar t1 in
-        let (tyT2,nextuvar2,constr2) = recon ctx nextuvar1 t2 in
-        let NextUVar(tyX,nextuvar') = nextuvar2() in
-        let newconstr = [(tyT1,TyArr(tyT2,TyId(tyX)))] in
-        ((TyId(tyX)), nextuvar', List.concat [newconstr; constr1; constr2])
-    | TmLet(fi, x, t1, t2) ->
-        if not (isval ctx t1) then
-          let (tyT1,nextuvar1,constr1) = recon ctx nextuvar t1 in
-          let ctx1 = addbinding ctx x (VarBind(tyT1)) in
-          let (tyT2,nextuvar2,constr2) = recon ctx1 nextuvar1 t2 in
-          (tyT2, nextuvar2, constr1@constr2)
-        else
-          recon ctx nextuvar (termSubstTop t1 t2)
-    | TmZero(fi) -> (TyNat, nextuvar, [])
-    | TmSucc(fi,t1) ->
-        let (tyT1,nextuvar1,constr1) = recon ctx nextuvar t1 in
-        (TyNat, nextuvar1, (tyT1,TyNat)::constr1)
-    | TmPred(fi,t1) ->
-        let (tyT1,nextuvar1,constr1) = recon ctx nextuvar t1 in
-        (TyNat, nextuvar1, (tyT1,TyNat)::constr1)
-    | TmIsZero(fi,t1) ->
-        let (tyT1,nextuvar1,constr1) = recon ctx nextuvar t1 in
-        (TyBool, nextuvar1, (tyT1,TyNat)::constr1)
-    | TmTrue(fi) -> (TyBool, nextuvar, [])
-    | TmFalse(fi) -> (TyBool, nextuvar, [])
-    | TmIf(fi,t1,t2,t3) ->
-        let (tyT1,nextuvar1,constr1) = recon ctx nextuvar t1 in
-        let (tyT2,nextuvar2,constr2) = recon ctx nextuvar1 t2 in
-        let (tyT3,nextuvar3,constr3) = recon ctx nextuvar2 t3 in
-        let newconstr = [(tyT1,TyBool); (tyT2,tyT3)] in
-        (tyT3, nextuvar3, List.concat [newconstr; constr1; constr2; constr3])
+    TmInert(fi,tyT) ->
+      tyT
+  | TmVar(fi,i,_) -> getTypeFromContext fi ctx i
+  | TmAbs(fi,x,tyT1,t2) ->
+      let ctx' = addbinding ctx x (VarBind(tyT1)) in
+      let tyT2 = typeof ctx' t2 in
+      TyArr(tyT1, typeShift (-1) tyT2)
+  | TmApp(fi,t1,t2) ->
+      let tyT1 = typeof ctx t1 in
+      let tyT2 = typeof ctx t2 in
+      (match simplifyty ctx tyT1 with
+          TyArr(tyT11,tyT12) ->
+            if tyeqv ctx tyT2 tyT11 then tyT12
+            else error fi "parameter type mismatch"
+        | _ -> error fi "arrow type expected")
+  | TmLet(fi,x,t1,t2) ->
+     let tyT1 = typeof ctx t1 in
+     let ctx' = addbinding ctx x (VarBind(tyT1)) in
+     typeShift (-1) (typeof ctx' t2)
+  | TmFix(fi, t1) ->
+      let tyT1 = typeof ctx t1 in
+      (match simplifyty ctx tyT1 with
+           TyArr(tyT11,tyT12) ->
+             if tyeqv ctx tyT12 tyT11 then tyT12
+             else error fi "result of body not compatible with domain"
+         | _ -> error fi "arrow type expected")
+  | TmString _ -> TyString
+  | TmUnit(fi) -> TyUnit
+  | TmAscribe(fi,t1,tyT) ->
+     if tyeqv ctx (typeof ctx t1) tyT then
+       tyT
+     else
+       error fi "body of as-term does not have the expected type"
+  | TmRecord(fi, fields) ->
+      let fieldtys =
+        List.map (fun (li,ti) -> (li, typeof ctx ti)) fields in
+      TyRecord(fieldtys)
+  | TmProj(fi, t1, l) ->
+      (match simplifyty ctx (typeof ctx t1) with
+          TyRecord(fieldtys) ->
+            (try List.assoc l fieldtys
+             with Not_found -> error fi ("label "^l^" not found"))
+        | _ -> error fi "Expected record type")
+  | TmTrue(fi) ->
+      TyBool
+  | TmFalse(fi) ->
+      TyBool
+  | TmIf(fi,t1,t2,t3) ->
+     if tyeqv ctx (typeof ctx t1) TyBool then
+       let tyT2 = typeof ctx t2 in
+       if tyeqv ctx tyT2 (typeof ctx t3) then tyT2
+       else error fi "arms of conditional have different types"
+     else error fi "guard of conditional not a boolean"
+  | TmFloat _ -> TyFloat
+  | TmTimesfloat(fi,t1,t2) ->
+      if tyeqv ctx (typeof ctx t1) TyFloat
+      && tyeqv ctx (typeof ctx t2) TyFloat then TyFloat
+      else error fi "argument of timesfloat is not a number"
+  | TmZero(fi) ->
+      TyNat
+  | TmSucc(fi,t1) ->
+      if tyeqv ctx (typeof ctx t1) TyNat then TyNat
+      else error fi "argument of succ is not a number"
+  | TmPred(fi,t1) ->
+      if tyeqv ctx (typeof ctx t1) TyNat then TyNat
+      else error fi "argument of pred is not a number"
+  | TmIsZero(fi,t1) ->
+      if tyeqv ctx (typeof ctx t1) TyNat then TyBool
+      else error fi "argument of iszero is not a number"
+  | TmPack(fi,tyT1,t2,tyT) ->
+      (match simplifyty ctx tyT with
+          TySome(tyY,tyT2) ->
+            let tyU = typeof ctx t2 in
+            let tyU' = typeSubstTop tyT1 tyT2 in
+            if tyeqv ctx tyU tyU' then tyT
+            else error fi "doesn't match declared type"
+        | _ -> error fi "existential type expected")
+  | TmUnpack(fi,tyX,x,t1,t2) ->
+      let tyT1 = typeof ctx t1 in
+      (match simplifyty ctx tyT1 with
+          TySome(tyY,tyT11) ->
+            let ctx' = addbinding ctx tyX TyVarBind in
+            let ctx'' = addbinding ctx' x (VarBind tyT11) in
+            let tyT2 = typeof ctx'' t2 in
+            typeShift (-2) tyT2
+        | _ -> error fi "existential type expected")
+  | TmTAbs(fi,tyX,t2) ->
+      let ctx = addbinding ctx tyX TyVarBind in
+      let tyT2 = typeof ctx t2 in
+      TyAll(tyX,tyT2)
+  | TmTApp(fi,t1,tyT2) ->
+      let tyT1 = typeof ctx t1 in
+      (match simplifyty ctx tyT1 with
+           TyAll(_,tyT12) -> typeSubstTop tyT2 tyT12
+         | _ -> error fi "universal type expected")
 
-let substinty tyX tyT tyS =
-  let rec f tyS = match tyS with
-      TyArr(tyS1,tyS2) -> TyArr(f tyS1, f tyS2)
-    | TyNat -> TyNat
-    | TyBool -> TyBool
-    | TyId(s) -> if s=tyX then tyT else TyId(s)
-  in f tyS
-
-let applysubst constr tyT =
-  List.fold_left
-    (fun tyS (TyId(tyX),tyC2) -> substinty tyX tyC2 tyS)
-    tyT (List.rev constr)
-
-let substinconstr tyX tyT constr =
-  List.map
-    (fun (tyS1,tyS2) ->
-       (substinty tyX tyT tyS1, substinty tyX tyT tyS2))
-    constr
-
-let occursin tyX tyT =
-  let rec o tyT = match tyT with
-      TyArr(tyT1,tyT2) -> o tyT1 || o tyT2
-    | TyNat -> false
-    | TyBool -> false
-    | TyId(s) -> (s=tyX)
-  in o tyT
-
-let unify fi ctx msg constr =
-  let rec u constr = match constr with
-      [] -> []
-    | (tyS,TyId(tyX)) :: rest ->
-        if tyS = TyId(tyX) then u rest
-        else if occursin tyX tyS then
-          error fi (msg ^ ": circular constraints")
-        else
-          List.append (u (substinconstr tyX tyS rest))
-                      [(TyId(tyX),tyS)]
-    | (TyId(tyX),tyT) :: rest ->
-        if tyT = TyId(tyX) then u rest
-        else if occursin tyX tyT then
-          error fi (msg ^ ": circular constraints")
-        else
-          List.append (u (substinconstr tyX tyT rest))
-                      [(TyId(tyX),tyT)]
-    | (TyNat,TyNat) :: rest -> u rest
-    | (TyBool,TyBool) :: rest -> u rest
-    | (TyArr(tyS1,tyS2),TyArr(tyT1,tyT2)) :: rest ->
-        u ((tyS1,tyT1) :: (tyS2,tyT2) :: rest)
-    | (tyS,tyT)::rest ->
-        error fi "Unsolvable constraints"
-  in
-    u constr
+let evalbinding ctx b = match b with
+    TmAbbBind(t,tyT) ->
+      let t' = eval ctx t in
+      TmAbbBind(t',tyT)
+  | bind -> bind
