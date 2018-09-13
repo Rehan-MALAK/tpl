@@ -4,62 +4,28 @@ open Support.Pervasive
 open Support.Error
 
 (* Data type definitions *)
+type kind =
+    KnStar
+  | KnArr of kind * kind
+
 type ty =
     TyVar of int * int
-  | TyTop
-  | TyBot
-  | TyId of string
   | TyArr of ty * ty
-  | TyRecord of (string * ty) list
-  | TyVariant of (string * ty) list
-  | TyRef of ty
-  | TyBool
-  | TyString
-  | TyUnit
-  | TyFloat
-  | TyAll of string * ty * ty
-  | TySource of ty
-  | TySink of ty
-  | TyNat
+  | TyAll of string * kind * ty
+  | TyAbs of string * kind * ty
+  | TyApp of ty * ty
 
 type term =
     TmVar of info * int * int
   | TmAbs of info * string * ty * term
   | TmApp of info * term * term
-  | TmTrue of info
-  | TmFalse of info
-  | TmIf of info * term * term * term
-  | TmLet of info * string * term * term
-  | TmFix of info * term
-  | TmRecord of info * (string * term) list
-  | TmProj of info * term * string
-  | TmCase of info * term * (string * (string * term)) list
-  | TmTag of info * string * term * ty
-  | TmAscribe of info * term * ty
-  | TmString of info * string
-  | TmUnit of info
-  | TmLoc of info * int
-  | TmRef of info * term
-  | TmDeref of info * term
-  | TmAssign of info * term * term
-  | TmError of info
-  | TmTry of info * term * term
-  | TmFloat of info * float
-  | TmTimesfloat of info * term * term
-  | TmZero of info
-  | TmSucc of info * term
-  | TmPred of info * term
-  | TmIsZero of info * term
-  | TmInert of info * ty
-  | TmTAbs of info * string * ty * term
+  | TmTAbs of info * string * kind * term
   | TmTApp of info * term * ty
 
 type binding =
     NameBind
-  | TyVarBind of ty
+  | TyVarBind of kind
   | VarBind of ty
-  | TmAbbBind of term * (ty option)
-  | TyAbbBind of ty
 
 type command =
   | Eval of info * term
@@ -88,6 +54,7 @@ val tytermSubstTop: ty -> term -> term
 val printtm: context -> term -> unit
 val printtm_ATerm: bool -> context -> term -> unit
 val printty : context -> ty -> unit
+val printkn : context -> kind -> unit
 val prbinding : context -> binding -> unit
 
 (* Misc *)
