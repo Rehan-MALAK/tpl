@@ -8,15 +8,12 @@ open Support.Pervasive
 type ty =
     TyTop
   | TyBot
-  | TyRecord of (string * ty) list
   | TyArr of ty * ty
 
 type term =
     TmVar of info * int * int
   | TmAbs of info * string * ty * term
   | TmApp of info * term * term
-  | TmRecord of info * (string * term) list
-  | TmProj of info * term * string
 
 type binding =
     NameBind
@@ -74,10 +71,6 @@ let tmmap onvar c t =
     TmVar(fi,x,n) -> onvar fi c x n
   | TmAbs(fi,x,tyT1,t2) -> TmAbs(fi,x,tyT1,walk (c+1) t2)
   | TmApp(fi,t1,t2) -> TmApp(fi,walk c t1,walk c t2)
-  | TmProj(fi,t1,l) -> TmProj(fi,walk c t1,l)
-  | TmRecord(fi,fields) -> TmRecord(fi,List.map (fun (li,ti) ->
-                                               (li,walk c ti))
-                                    fields)
   in walk c t
 
 let termShiftAbove d c t =
@@ -122,8 +115,6 @@ let tmInfo t = match t with
     TmVar(fi,_,_) -> fi
   | TmAbs(fi,_,_,_) -> fi
   | TmApp(fi, _, _) -> fi
-  | TmProj(fi,_,_) -> fi
-  | TmRecord(fi,_) -> fi
 
 (* ---------------------------------------------------------------------- *)
 (* Printing *)
@@ -166,18 +157,7 @@ and printty_ArrowType outer  tyT = match tyT with
   | tyT -> printty_AType outer tyT
 
 and printty_AType outer tyT = match tyT with
-    TyRecord(fields) ->
-        let pf i (li,tyTi) =
-          if (li <> ((string_of_int i))) then (pr li; pr ":");
-          printty_Type false tyTi
-        in let rec p i l = match l with
-            [] -> ()
-          | [f] -> pf i f
-          | f::rest ->
-              pf i f; pr","; if outer then print_space() else break();
-              p (i+1) rest
-        in pr "{"; open_hovbox 0; p 1 fields; pr "}"; cbox()
-  | TyTop -> pr "Top"
+    TyTop -> pr "Top"
   | TyBot -> pr "Bot"
   | tyT -> pr "("; printty_Type outer tyT; pr ")"
 
@@ -200,11 +180,6 @@ and printtm_AppTerm outer ctx t = match t with
       print_space();
       printtm_ATerm false ctx t2;
       cbox()
-  | t -> printtm_PathTerm outer ctx t
-
-and printtm_PathTerm outer ctx t = match t with
-    TmProj(_, t1, l) ->
-      printtm_ATerm false ctx t1; pr "."; pr l
   | t -> printtm_ATerm outer ctx t
 
 and printtm_ATerm outer ctx t = match t with
@@ -216,17 +191,6 @@ and printtm_ATerm outer ctx t = match t with
             ^ " in {"
             ^ (List.fold_left (fun s (x,_) -> s ^ " " ^ x) "" ctx)
             ^ " }]")
-  | TmRecord(fi, fields) ->
-       let pf i (li,ti) =
-         if (li <> ((string_of_int i))) then (pr li; pr "=");
-         printtm_Term false ctx ti
-       in let rec p i l = match l with
-           [] -> ()
-         | [f] -> pf i f
-         | f::rest ->
-             pf i f; pr","; if outer then print_space() else break();
-             p (i+1) rest
-       in pr "{"; open_hovbox 0; p 1 fields; pr "}"; cbox()
   | t -> pr "("; printtm_Term outer ctx t; pr ")"
 
 let printtm ctx t = printtm_Term true ctx t
