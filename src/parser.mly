@@ -22,15 +22,17 @@ open Syntax
  */
 
 /* Keyword tokens */
+%token <Support.Error.info> LET
+%token <Support.Error.info> IN
 %token <Support.Error.info> IF
 %token <Support.Error.info> THEN
 %token <Support.Error.info> ELSE
 %token <Support.Error.info> TRUE
 %token <Support.Error.info> FALSE
+%token <Support.Error.info> BOOL
 %token <Support.Error.info> SUCC
 %token <Support.Error.info> PRED
 %token <Support.Error.info> ISZERO
-%token <Support.Error.info> BOOL
 %token <Support.Error.info> NAT
 %token <Support.Error.info> LAMBDA
 
@@ -154,16 +156,24 @@ ArrowType :
 Term :
     AppTerm
       { $1 }
+  | LET LCID EQ Term IN Term
+      { fun ctx -> TmLet($1, $2.v, $4 ctx, $6 (addname ctx $2.v)) }
+  | LET USCORE EQ Term IN Term
+      { fun ctx -> TmLet($1, "_", $4 ctx, $6 (addname ctx "_")) }
   | IF Term THEN Term ELSE Term
       { fun ctx -> TmIf($1, $2 ctx, $4 ctx, $6 ctx) }
+  | LAMBDA LCID DOT Term
+      { fun ctx ->
+          let ctx1 = addname ctx $2.v in
+          TmAbs($1, $2.v, None, $4 ctx1) }
   | LAMBDA LCID COLON Type DOT Term
       { fun ctx ->
           let ctx1 = addname ctx $2.v in
-          TmAbs($1, $2.v, $4 ctx, $6 ctx1) }
+          TmAbs($1, $2.v, Some($4 ctx), $6 ctx1) }
   | LAMBDA USCORE COLON Type DOT Term
       { fun ctx ->
           let ctx1 = addname ctx "_" in
-          TmAbs($1, "_", $4 ctx, $6 ctx1) }
+          TmAbs($1, "_", Some($4 ctx), $6 ctx1) }
 
 AppTerm :
     ATerm
@@ -184,6 +194,9 @@ AppTerm :
 ATerm :
     LPAREN Term RPAREN
       { $2 }
+  | LCID
+      { fun ctx ->
+          TmVar($1.i, name2index $1.i ctx $1.v, ctxlength ctx) }
   | TRUE
       { fun ctx -> TmTrue($1) }
   | FALSE
@@ -194,9 +207,6 @@ ATerm :
               0 -> TmZero($1.i)
             | n -> TmSucc($1.i, f (n-1))
           in f $1.v }
-  | LCID
-      { fun ctx ->
-          TmVar($1.i, name2index $1.i ctx $1.v, ctxlength ctx) }
 
 
 /*   */

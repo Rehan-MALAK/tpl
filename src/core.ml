@@ -20,7 +20,12 @@ let rec isval ctx t = match t with
   | _ -> false
 
 let rec eval1 ctx t = match t with
-    TmIf(_,TmTrue(_),t2,t3) ->
+    TmLet(fi,x,v1,t2) when isval ctx v1 ->
+      termSubstTop v1 t2
+  | TmLet(fi,x,t1,t2) ->
+      let t1' = eval1 ctx t1 in
+      TmLet(fi, x, t1', t2)
+  | TmIf(_,TmTrue(_),t2,t3) ->
       t2
   | TmIf(_,TmFalse(_),t2,t3) ->
       t3
@@ -84,21 +89,35 @@ let uvargen =
   let rec f n () = NextUVar("?X" ^ string_of_int n, f (n+1))
   in f 0
 
-let rec recon ctx nextuvar t = match t with
+let rec recon ctx nextuvar t =
+  match t with
       TmVar(fi,i,_) ->
         let tyT = getTypeFromContext fi ctx i in
         (tyT, nextuvar, [])
-    | TmAbs(fi, x, tyT1, t2) ->
+    | TmAbs(fi, x, Some(tyT1), t2) ->
         let ctx' = addbinding ctx x (VarBind(tyT1)) in
         let (tyT2,nextuvar2,constr2) = recon ctx' nextuvar t2 in
         (TyArr(tyT1, tyT2), nextuvar2, constr2)
+    | TmAbs(fi, x, None, t2) ->
+        let NextUVar(u,nextuvar0) = nextuvar() in
+        let tyX = TyId(u) in
+        let ctx' = addbinding ctx x (VarBind(tyX)) in
+        let (tyT2,nextuvar2,constr2) = recon ctx' nextuvar0 t2 in
+        (TyArr(tyX, tyT2), nextuvar2, constr2)
     | TmApp(fi,t1,t2) ->
         let (tyT1,nextuvar1,constr1) = recon ctx nextuvar t1 in
         let (tyT2,nextuvar2,constr2) = recon ctx nextuvar1 t2 in
         let NextUVar(tyX,nextuvar') = nextuvar2() in
         let newconstr = [(tyT1,TyArr(tyT2,TyId(tyX)))] in
-        ((TyId(tyX)), nextuvar',
-         List.concat [newconstr; constr1; constr2])
+        ((TyId(tyX)), nextuvar', List.concat [newconstr; constr1; constr2])
+    | TmLet(fi, x, t1, t2) ->
+        if not (isval ctx t1) then
+          let (tyT1,nextuvar1,constr1) = recon ctx nextuvar t1 in
+          let ctx1 = addbinding ctx x (VarBind(tyT1)) in
+          let (tyT2,nextuvar2,constr2) = recon ctx1 nextuvar1 t2 in
+          (tyT2, nextuvar2, constr1@constr2)
+        else
+          recon ctx nextuvar (termSubstTop t1 t2)
     | TmZero(fi) -> (TyNat, nextuvar, [])
     | TmSucc(fi,t1) ->
         let (tyT1,nextuvar1,constr1) = recon ctx nextuvar t1 in
@@ -116,8 +135,7 @@ let rec recon ctx nextuvar t = match t with
         let (tyT2,nextuvar2,constr2) = recon ctx nextuvar1 t2 in
         let (tyT3,nextuvar3,constr3) = recon ctx nextuvar2 t3 in
         let newconstr = [(tyT1,TyBool); (tyT2,tyT3)] in
-        (tyT3, nextuvar3,
-         List.concat [newconstr; constr1; constr2; constr3])
+        (tyT3, nextuvar3, List.concat [newconstr; constr1; constr2; constr3])
 
 let substinty tyX tyT tyS =
   let rec f tyS = match tyS with

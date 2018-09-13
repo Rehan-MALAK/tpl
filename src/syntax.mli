@@ -11,15 +11,16 @@ type ty =
   | TyId of string
 
 type term =
-    TmTrue of info
+    TmVar of info * int * int
+  | TmLet of info * string * term * term
+  | TmTrue of info
   | TmFalse of info
   | TmIf of info * term * term * term
   | TmZero of info
   | TmSucc of info * term
   | TmPred of info * term
   | TmIsZero of info * term
-  | TmVar of info * int * int
-  | TmAbs of info * string * ty * term
+  | TmAbs of info * string * ty option * term
   | TmApp of info * term * term
 
 type binding =
