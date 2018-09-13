@@ -8,25 +8,27 @@ type kind =
     KnStar
   | KnArr of kind * kind
 
-type variance =
-    Invariant
-  | Covariant
-
 type ty =
-    TyVar of int * int
-  | TyId of string
-  | TyTop
-  | TyArr of ty * ty
+    TyId of string
+  | TyVar of int * int
   | TyBool
-  | TyRecord of (string * (variance * ty)) list
+  | TyTop
+  | TyBot
+  | TyArr of ty * ty
+  | TyRecord of (string * ty) list
+  | TyVariant of (string * ty) list
+  | TyRef of ty
+  | TyFloat
   | TyString
   | TyUnit
-  | TyFloat
   | TyAll of string * ty * ty
   | TyNat
   | TySome of string * ty * ty
+  | TySource of ty
+  | TySink of ty
   | TyAbs of string * kind * ty
   | TyApp of ty * ty
+
 
 type term =
     TmVar of info * int * int
@@ -35,15 +37,23 @@ type term =
   | TmTrue of info
   | TmFalse of info
   | TmIf of info * term * term * term
-  | TmRecord of info * (string * (variance * term)) list
+  | TmRecord of info * (string * term) list
   | TmProj of info * term * string
   | TmLet of info * string * term * term
-  | TmFix of info * term
-  | TmString of info * string
-  | TmUnit of info
-  | TmAscribe of info * term * ty
   | TmFloat of info * float
   | TmTimesfloat of info * term * term
+  | TmAscribe of info * term * ty
+  | TmString of info * string
+  | TmUnit of info
+  | TmFix of info * term
+  | TmCase of info * term * (string * (string * term)) list
+  | TmTag of info * string * term * ty
+  | TmLoc of info * int
+  | TmRef of info * term
+  | TmDeref of info * term
+  | TmAssign of info * term * term
+  | TmError of info
+  | TmTry of info * term * term
   | TmTAbs of info * string * ty * term
   | TmTApp of info * term * ty
   | TmZero of info
@@ -53,7 +63,6 @@ type term =
   | TmInert of info * ty
   | TmPack of info * ty * term * ty
   | TmUnpack of info * string * string * term * term
-  | TmUpdate of info * term * string * term
 
 type binding =
     NameBind
@@ -63,6 +72,7 @@ type binding =
   | TmAbbBind of term * (ty option)
 
 type command =
+    Import of string
   | Eval of info * term
   | Bind of info * string * binding
   | SomeBind of info * string * string * term
@@ -96,3 +106,4 @@ val prbinding : context -> binding -> unit
 (* Misc *)
 val tmInfo: term -> info
 val maketop: kind -> ty
+
