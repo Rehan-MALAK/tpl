@@ -13,3 +13,4 @@ val tyeqv : context -> ty -> ty -> bool
 val kindof : context -> ty -> kind
 val lcst : context -> ty -> ty
 val simplifyty : context -> ty -> ty
+val evalbinding : context -> binding -> binding
